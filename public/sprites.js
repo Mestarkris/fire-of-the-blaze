@@ -178,3 +178,77 @@ function drawGun(ctx, x, y, angle, color) {
   ctx.fillRect(6, -2, 12, 4);
   ctx.restore();
 }
+
+// Breaks text into lines no wider than maxWidth (word-wrap), since canvas
+// text has no built-in wrapping. ctx.font must already be set before calling.
+function wrapBubbleText(ctx, text, maxWidth) {
+  const words = text.split(' ');
+  const lines = [];
+  let current = '';
+  words.forEach((word) => {
+    const test = current ? `${current} ${word}` : word;
+    if (current && ctx.measureText(test).width > maxWidth) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = test;
+    }
+  });
+  if (current) lines.push(current);
+  return lines;
+}
+
+// Pixel-style speech bubble with a downward-pointing tail, anchored above
+// (x, y) - the tip of the tail sits at (x, y). Fades via `alpha`; bosses get
+// a bigger, magenta-bordered variant so their lines read as more special.
+function drawSpeechBubble(ctx, x, y, text, alpha, isBoss) {
+  const fontSize = isBoss ? 11 : 8;
+  ctx.save();
+  ctx.font = `${fontSize}px 'Press Start 2P', monospace`;
+  const maxWidth = isBoss ? 190 : 130;
+  const lines = wrapBubbleText(ctx, text, maxWidth);
+  const lineHeight = fontSize + 6;
+  const padX = 10, padY = 7;
+  const textWidth = Math.max(...lines.map((l) => ctx.measureText(l).width));
+  const boxW = textWidth + padX * 2;
+  const boxH = lines.length * lineHeight + padY * 2 - (lineHeight - fontSize);
+  const boxX = x - boxW / 2;
+  const boxY = y - boxH;
+  const r = 4;
+
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = 'rgba(11,12,15,0.88)';
+  ctx.strokeStyle = isBoss ? '#ff3d7f' : '#2c303a';
+  ctx.lineWidth = isBoss ? 2 : 1;
+
+  ctx.beginPath();
+  ctx.moveTo(boxX + r, boxY);
+  ctx.lineTo(boxX + boxW - r, boxY);
+  ctx.arcTo(boxX + boxW, boxY, boxX + boxW, boxY + r, r);
+  ctx.lineTo(boxX + boxW, boxY + boxH - r);
+  ctx.arcTo(boxX + boxW, boxY + boxH, boxX + boxW - r, boxY + boxH, r);
+  ctx.lineTo(boxX + r, boxY + boxH);
+  ctx.arcTo(boxX, boxY + boxH, boxX, boxY + boxH - r, r);
+  ctx.lineTo(boxX, boxY + r);
+  ctx.arcTo(boxX, boxY, boxX + r, boxY, r);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(x - 5, boxY + boxH);
+  ctx.lineTo(x + 5, boxY + boxH);
+  ctx.lineTo(x, boxY + boxH + 6);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(11,12,15,0.88)';
+  ctx.fill();
+
+  ctx.fillStyle = '#eef0f3';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  lines.forEach((line, i) => {
+    ctx.fillText(line, x, boxY + padY + lineHeight * i + fontSize / 2);
+  });
+
+  ctx.restore();
+}

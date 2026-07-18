@@ -107,6 +107,8 @@ const state = {
   bgTransition: null,
   lastMoveAngle: 0,
   joystick: { active: false, dx: 0, dy: 0 },
+  speechBubbles: [],
+  killStreak: 0,
 };
 
 const SHIELD_ABILITY_DURATION = 2000;
@@ -250,6 +252,10 @@ function resetState() {
   state.bgTransition = null;
   state.lastMoveAngle = 0;
   state.joystick = { active: false, dx: 0, dy: 0 };
+  state.speechBubbles = [];
+  state.killStreak = 0;
+  lastLineIndex = {};
+  lastSpeechBubbleAt = 0;
   seedObstacles();
   updateHud();
 }
@@ -560,6 +566,93 @@ const ENEMY_ARCHETYPES = {
   loot: { r: 14, hp: 1, speedRange: [70, 100], color: '#fff6c8', score: 75 },
 };
 
+// ---------------------------------------------------------------------------
+// Combat dialogue - short speech bubbles above enemies and the player.
+// Enemy lines fire once on spawn and once on death; player lines fire on
+// kills (occasionally), kill-streak milestones, and taking damage.
+// ---------------------------------------------------------------------------
+
+const ENEMY_LINES = {
+  chaser: {
+    spawn: ['There he is!', "Don't let him breathe!", 'Swarm him!', 'No mercy today!'],
+    death: ['Tell my mom I—', 'Worth it...', 'This wasn\'t in the job description', 'Ow. Rude.'],
+  },
+  sniper: {
+    spawn: ["I've got the shot.", 'Hold still, hero.', "Line 'em up..."],
+    death: ['I had... a scope discount coming...', "Should've brought a bigger gun", 'This is why I work remote'],
+  },
+  dasher: {
+    spawn: ['Ready... set...', "Can't catch what you can't see!", 'Blink and you\'re mine!'],
+    death: ['Too... fast... for my own good', 'I regret nothing! Mostly.'],
+  },
+  swarmer: {
+    spawn: ['We outnumber him!', 'Pile on!', 'Strength in numbers!'],
+    death: ['Aw, man.', 'Worth a shot.', 'Tell the others...'],
+  },
+  boss: {
+    spawn: ["You've made a mistake showing up.", "Let's see what you're made of.", 'This ends here, streamer.'],
+    death: ['Impossible... this can\'t be how it ends...', "You'll pay for this, eventually. Probably.", 'Tell chat... I said hi.'],
+  },
+};
+
+const PLAYER_KILL_LINES = ['Not today!', 'Next!', 'Too easy.', 'Chat, did you see that?'];
+const PLAYER_STREAK_LINES = ["I'm just getting started!", 'Someone stop me!'];
+const PLAYER_DAMAGE_LINES = ['Okay, that one hurt.', 'Rude.', 'Chat, help me out here!'];
+
+const MAX_SPEECH_BUBBLES = 4;
+const SPEECH_BUBBLE_STAGGER_MS = 350;
+let lastSpeechBubbleAt = 0;
+let lastLineIndex = {};
+
+function pickRandom(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+// Picks a random line from ENEMY_LINES[type][moment], avoiding an immediate
+// repeat of the last line used for that same type + moment combo.
+function pickLine(type, moment) {
+  const pool = ENEMY_LINES[type]?.[moment];
+  if (!pool || pool.length === 0) return null;
+  const key = `${type}:${moment}`;
+  let idx = Math.floor(Math.random() * pool.length);
+  if (pool.length > 1 && idx === lastLineIndex[key]) idx = (idx + 1) % pool.length;
+  lastLineIndex[key] = idx;
+  return pool[idx];
+}
+
+// entity needs x/y (read live if still around, frozen at last value once
+// removed from its array - e.g. a dead enemy's bubble stays put automatically
+// since nothing moves it anymore). Global-rate-limited and capped so a swarm
+// wave doesn't turn into a wall of overlapping text.
+function trySpawnSpeechBubble(entity, text, opts = {}) {
+  if (!text) return false;
+  const nowMs = performance.now();
+  if (state.speechBubbles.length >= MAX_SPEECH_BUBBLES) return false;
+  if (nowMs - lastSpeechBubbleAt < SPEECH_BUBBLE_STAGGER_MS) return false;
+  lastSpeechBubbleAt = nowMs;
+  state.speechBubbles.push({
+    follow: entity,
+    text,
+    age: 0,
+    duration: opts.duration || 1.8,
+    boss: !!opts.boss,
+    isPlayer: !!opts.isPlayer,
+  });
+  return true;
+}
+
+// Player lines never overlap - if one's already showing, skip this trigger
+// rather than queueing it, so it can't pile up.
+function tryPlayerLine(text, duration = 1.8) {
+  if (state.speechBubbles.some((b) => b.isPlayer)) return false;
+  return trySpawnSpeechBubble(state.player, text, { duration, isPlayer: true });
+}
+
+function onPlayerDamaged() {
+  state.killStreak = 0;
+  tryPlayerLine(pickRandom(PLAYER_DAMAGE_LINES));
+}
+
 function spawnEnemy(boss = false, forcedType = null) {
   const edge = Math.floor(Math.random() * 4);
   let x, y;
@@ -597,6 +690,8 @@ function spawnEnemy(boss = false, forcedType = null) {
     wanderAngle: Math.random() * Math.PI * 2,
     wanderTimer: 0,
   });
+  const spawned = state.enemies[state.enemies.length - 1];
+  trySpawnSpeechBubble(spawned, pickLine(type, 'spawn'), { boss, duration: boss ? 2.5 : 1.8 });
 }
 
 // Swarmers arrive in a cluster of 3-4 from the same edge point, not as
@@ -1198,6 +1293,7 @@ function update(dt, now) {
       if (!p.shielded) {
         p.hp -= e.boss ? 25 : 10;
         updateHud();
+        onPlayerDamaged();
         spawnParticles(p.x, p.y, '#ff3d7f');
         triggerShake(e.boss ? 14 : 7);
         applyKnockback(p, Math.atan2(p.y - e.y, p.x - e.x), 200);
@@ -1219,6 +1315,7 @@ function update(dt, now) {
       if (!p.shielded) {
         p.hp -= 8;
         updateHud();
+        onPlayerDamaged();
         spawnParticles(p.x, p.y, '#8b5cf6');
         triggerShake(6);
         applyKnockback(p, Math.atan2(pr.vy, pr.vx), 120);
@@ -1282,7 +1379,14 @@ function update(dt, now) {
   const before = state.enemies.length;
   state.enemies = state.enemies.filter((e) => {
     if (e.hp > 0) return true;
+    trySpawnSpeechBubble(e, pickLine(e.type, 'death'), { boss: e.boss, duration: e.boss ? 2.5 : 1.8 });
     state.score += e.score;
+    state.killStreak += 1;
+    if (state.killStreak > 0 && state.killStreak % 10 === 0) {
+      tryPlayerLine(pickRandom(PLAYER_STREAK_LINES));
+    } else if (Math.random() < 0.25) {
+      tryPlayerLine(pickRandom(PLAYER_KILL_LINES));
+    }
     return false;
   });
   if (state.enemies.length !== before) updateHud();
@@ -1290,6 +1394,12 @@ function update(dt, now) {
   // Particles
   state.particles.forEach((pt) => { pt.life -= dt; pt.x += pt.vx * dt; pt.y += pt.vy * dt; });
   state.particles = state.particles.filter((pt) => pt.life > 0);
+
+  // Speech bubbles - age out and disappear; a bubble whose entity has died
+  // and left state.enemies just stops moving (nothing mutates its x/y
+  // anymore), which is exactly the "freeze in place" behavior we want.
+  state.speechBubbles.forEach((b) => { b.age += dt; });
+  state.speechBubbles = state.speechBubbles.filter((b) => b.age < b.duration);
 }
 
 function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
@@ -1701,6 +1811,16 @@ function render() {
     ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 10, 0, Math.PI * 2); ctx.stroke();
   }
   drawGun(ctx, p.x, p.y, p.gunAngle, p.shielded ? '#38e8d4' : '#F0B90B');
+
+  // Speech bubbles - drawn last so they float above every sprite, enemy,
+  // and effect already rendered this frame.
+  state.speechBubbles.forEach((b) => {
+    const t = b.age / b.duration;
+    const alpha = t < 0.6 ? 1 : Math.max(0, 1 - (t - 0.6) / 0.4);
+    const floatUp = 10 * Math.min(1, t / 0.4) + 6 * t;
+    const headR = b.follow.r || 16;
+    drawSpeechBubble(ctx, b.follow.x, b.follow.y - headR - 10 - floatUp, b.text, alpha, b.boss);
+  });
 
   ctx.restore();
 
