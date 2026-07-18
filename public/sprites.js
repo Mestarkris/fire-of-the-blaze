@@ -19,6 +19,12 @@ const PALETTES = {
   // Loot enemy (spawned by small tips) - same silhouette as the base enemy
   // but a bright gold-white palette so it reads as a juicy bonus target.
   loot: { '#': '#4a3a00', A: '#fff6c8', B: '#ffcf3d', C: '#ffffff' },
+  // Grunt - dim, washed-out fodder that dies in one hit; reads as visibly
+  // weaker than the chaser at a glance, not just numerically.
+  grunt: { '#': '#1a1c20', A: '#8a8f9a', B: '#5a5f6a', C: '#c8ccd4' },
+  // Brute - tanky ranged attacker, dark blood-red and rendered larger than
+  // regular enemies so it reads as the most dangerous non-boss threat.
+  brute: { '#': '#2a0505', A: '#8a0e0e', B: '#500808', C: '#ff4d4d' },
 };
 
 // Player, frame 1 (legs together) - 10x10
@@ -151,6 +157,8 @@ const SPRITES = {
   dasher: renderSpriteToCanvas(DASHER, PALETTES.dasher),
   swarmer: renderSpriteToCanvas(SWARMER, PALETTES.swarmer),
   loot: renderSpriteToCanvas(ENEMY, PALETTES.loot),
+  grunt: renderSpriteToCanvas(ENEMY, PALETTES.grunt),
+  brute: renderSpriteToCanvas(ENEMY, PALETTES.brute),
 };
 
 // Draw a sprite centered at (x, y), optionally flipped horizontally,

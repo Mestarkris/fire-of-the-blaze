@@ -149,7 +149,10 @@ const WEAPON_DURATION_MS = 15000;
 const WAVE_DURATION = 30;
 
 function currentSpawnInterval() {
-  return Math.max(0.7, 2.2 - (state.wave - 1) * 0.12);
+  const base = Math.max(0.7, 2.2 - (state.wave - 1) * 0.12);
+  // Danger waves trade crowd size for individual toughness - fewer enemies
+  // incoming overall, so it reads as "one bad enemy" rather than a mob.
+  return isDangerWave(state.wave) ? base + 0.6 : base;
 }
 
 function spawnWaveBossPack() {
@@ -162,7 +165,14 @@ function spawnWaveBossPack() {
 function advanceWave() {
   state.wave += 1;
   state.waveTime = 0;
-  state.waveBanner = { text: `WAVE ${state.wave}`, elapsed: 0, duration: 2.0, active: true };
+  const danger = isDangerWave(state.wave);
+  state.waveBanner = {
+    text: danger ? `DANGER - WAVE ${state.wave}` : `WAVE ${state.wave}`,
+    elapsed: 0,
+    duration: 2.0,
+    active: true,
+    danger,
+  };
   state.spawnPausedUntil = performance.now() + 2000;
   if (state.wave % 5 === 0) spawnWaveBossPack();
   scheduleHealthPickups();
@@ -549,11 +559,20 @@ function escapeHtml(str) {
 // Enemy types are introduced gradually as waves progress, so the mix of
 // threats grows alongside difficulty rather than dumping everything at once.
 function pickEnemyType() {
-  const pool = ['chaser'];
+  const pool = ['chaser', 'grunt'];
   if (state.wave >= 3) pool.push('swarmer');
   if (state.wave >= 5) pool.push('sniper');
+  if (state.wave >= 6) pool.push('brute');
   if (state.wave >= 8) pool.push('dasher');
   return pool[Math.floor(Math.random() * pool.length)];
+}
+
+// Every 3rd wave (skipping boss waves, which are already a spike) is a
+// "danger wave" - fewer enemies come in (see currentSpawnInterval) but the
+// ones that do are tougher, so the threat feels concentrated rather than
+// just a bigger crowd.
+function isDangerWave(wave) {
+  return wave % 3 === 0 && wave % 5 !== 0;
 }
 
 const ENEMY_ARCHETYPES = {
@@ -565,6 +584,13 @@ const ENEMY_ARCHETYPES = {
   // Loot enemy - spawned only by small tips (never in the normal random pool),
   // one-hit-kill with a big score payout so grabbing it feels like a reward.
   loot: { r: 14, hp: 1, speedRange: [70, 100], color: '#fff6c8', score: 75 },
+  // Grunt - weak fodder available from wave 1, dies in one hit like loot but
+  // worth little score; gives the player easy, satisfying kills to mix in
+  // with tougher enemies rather than every enemy being a real threat.
+  grunt: { r: 12, hp: 1, speedRange: [70, 100], color: '#8a8f9a', score: 6 },
+  // Brute - the most dangerous regular (non-boss) enemy: tanky, slow, and
+  // armed with the hardest-hitting ranged attack in the game.
+  brute: { r: 20, hp: 5, speedRange: [40, 55], color: '#8a0e0e', score: 35 },
 };
 
 // ---------------------------------------------------------------------------
@@ -730,15 +756,21 @@ function spawnEnemy(boss = false, forcedType = null) {
   const type = boss ? 'boss' : (forcedType || pickEnemyType());
   const def = ENEMY_ARCHETYPES[type];
   const waveSpeedMul = 1 + (state.wave - 1) * 0.04;
-  const speed = (def.speedRange[0] + Math.random() * (def.speedRange[1] - def.speedRange[0])) * waveSpeedMul;
+  // Danger waves buff regular wave enemies (not bosses, and not tip-reward
+  // loot enemies) so the fewer spawns that do come in hit noticeably harder.
+  const dangerBuffed = !boss && type !== 'loot' && isDangerWave(state.wave);
+  const hpMul = dangerBuffed ? 1.6 : 1;
+  const speedBuffMul = dangerBuffed ? 1.15 : 1;
+  const speed = (def.speedRange[0] + Math.random() * (def.speedRange[1] - def.speedRange[0])) * waveSpeedMul * speedBuffMul;
 
   state.enemies.push({
     x, y,
     type,
     r: def.r,
-    hp: def.hp,
+    hp: Math.round(def.hp * hpMul),
     speed,
     boss,
+    dangerBuffed,
     color: def.color,
     score: def.score,
     facingLeft: false,
@@ -746,7 +778,7 @@ function spawnEnemy(boss = false, forcedType = null) {
     hitFlash: 0,
     kx: 0,
     ky: 0,
-    // sniper
+    // sniper / brute
     strafeDir: Math.random() < 0.5 ? 1 : -1,
     fireCooldown: 1 + Math.random(),
     // dasher
@@ -1314,6 +1346,29 @@ function update(dt, now) {
           r: 5, life: 4,
         });
       }
+    } else if (e.type === 'brute') {
+      // Keeps its distance like a sniper but turns slower - a heavier,
+      // more deliberate threat - and fires the hardest-hitting enemy shot
+      // in the game on a slow cooldown.
+      const d = dist(e, p);
+      let targetAngle;
+      if (d < 220) targetAngle = idealAngle + Math.PI;
+      else if (d > 320) targetAngle = idealAngle;
+      else targetAngle = idealAngle + (Math.PI / 2) * e.strafeDir;
+      if (e.heading === undefined) e.heading = targetAngle;
+      e.heading = lerpAngle(e.heading, targetAngle, dt * 1.6);
+      e.x += Math.cos(e.heading) * e.speed * speedMul * dt;
+      e.y += Math.sin(e.heading) * e.speed * speedMul * dt;
+
+      e.fireCooldown -= dt;
+      if (e.fireCooldown <= 0 && d < 560) {
+        e.fireCooldown = 3 + Math.random() * 0.5;
+        state.enemyProjectiles.push({
+          x: e.x, y: e.y,
+          vx: Math.cos(idealAngle) * 140, vy: Math.sin(idealAngle) * 140,
+          r: 8, life: 5, damage: 20,
+        });
+      }
     } else if (e.type === 'dasher') {
       e.dashTimer -= dt;
       if (e.dashMode === 'wander') {
@@ -1379,13 +1434,13 @@ function update(dt, now) {
     if (pr.life > 0 && dist(pr, p) < pr.r + p.r) {
       pr.life = 0;
       if (!p.shielded) {
-        p.hp -= 8;
+        p.hp -= pr.damage || 8;
         updateHud();
         onPlayerDamaged();
-        spawnParticles(p.x, p.y, '#8b5cf6');
-        triggerShake(6);
-        applyKnockback(p, Math.atan2(pr.vy, pr.vx), 120);
-        triggerHitstop(70);
+        spawnParticles(p.x, p.y, pr.damage ? '#ff4d4d' : '#8b5cf6');
+        triggerShake(pr.damage ? 10 : 6);
+        applyKnockback(p, Math.atan2(pr.vy, pr.vx), pr.damage ? 200 : 120);
+        triggerHitstop(pr.damage ? 100 : 70);
         if (p.hp <= 0) gameOver();
       }
     }
@@ -1456,7 +1511,7 @@ function update(dt, now) {
       tryPlayerLine('boss', 2.5);
     } else if (state.killStreak > 0 && state.killStreak % 10 === 0) {
       tryPlayerLine('streak');
-    } else if (e.type === 'sniper' || e.type === 'dasher') {
+    } else if (e.type === 'sniper' || e.type === 'dasher' || e.type === 'brute') {
       if (Math.random() < 0.25) tryPlayerLine('tougher');
     } else if (Math.random() < 0.25) {
       tryPlayerLine('general');
@@ -1760,7 +1815,7 @@ function render() {
   state.enemies.forEach((e) => {
     const bob = Math.sin(now * 5 + e.bobSeed) * 2;
     const sprite = e.boss ? SPRITES.boss : (SPRITES[e.type] || SPRITES.enemy);
-    let size = e.boss ? 76 : (e.type === 'swarmer' ? 22 : 40);
+    let size = e.boss ? 76 : e.type === 'swarmer' ? 22 : e.type === 'brute' ? 54 : e.type === 'grunt' ? 32 : 40;
     if (e.type === 'dasher' && e.dashMode === 'telegraph') {
       const progress = 1 - Math.min(1, e.dashTimer / 0.5);
       size *= 1 - 0.35 * Math.sin(progress * Math.PI);
@@ -1770,6 +1825,15 @@ function render() {
       const glow = ctx.createRadialGradient(e.x, e.y + bob, 2, e.x, e.y + bob, size * 0.9);
       glow.addColorStop(0, `rgba(255,244,200,${0.5 * pulse})`);
       glow.addColorStop(1, 'rgba(255,244,200,0)');
+      ctx.fillStyle = glow;
+      ctx.fillRect(e.x - size, e.y + bob - size, size * 2, size * 2);
+    } else if (e.dangerBuffed) {
+      // Danger-wave enemies get a pulsing red glow so the extra HP/speed is
+      // visible at a glance, not just felt when it takes more hits to drop.
+      const pulse = 0.5 + 0.35 * Math.sin(now * 7);
+      const glow = ctx.createRadialGradient(e.x, e.y + bob, 2, e.x, e.y + bob, size * 0.85);
+      glow.addColorStop(0, `rgba(255,45,45,${0.45 * pulse})`);
+      glow.addColorStop(1, 'rgba(255,45,45,0)');
       ctx.fillStyle = glow;
       ctx.fillRect(e.x - size, e.y + bob - size, size * 2, size * 2);
     }
@@ -1783,13 +1847,16 @@ function render() {
     }
   });
 
-  // Sniper projectiles - small violet pixel bolts
+  // Sniper projectiles are small violet pixel bolts; brute projectiles are
+  // bigger and blood-red so its heavy hit reads as more dangerous on sight.
   state.enemyProjectiles.forEach((pr) => {
-    ctx.fillStyle = '#8b5cf6';
+    const color = pr.damage ? '#ff4d4d' : '#8b5cf6';
+    const half = pr.damage ? 5 : 3;
+    ctx.fillStyle = color;
     ctx.globalAlpha = 0.35;
-    ctx.fillRect(pr.x - pr.vx * 0.015 - 2, pr.y - pr.vy * 0.015 - 2, 4, 4);
+    ctx.fillRect(pr.x - pr.vx * 0.015 - half, pr.y - pr.vy * 0.015 - half, half * 2, half * 2);
     ctx.globalAlpha = 1;
-    ctx.fillRect(pr.x - 3, pr.y - 3, 6, 6);
+    ctx.fillRect(pr.x - half, pr.y - half, half * 2, half * 2);
   });
 
   // Bullets with a short pixel trail (rockets render larger, matching their hitbox)
@@ -1904,11 +1971,11 @@ function render() {
     ctx.globalAlpha = alpha;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = '700 40px "Press Start 2P", monospace';
+    ctx.font = state.waveBanner.danger ? '700 28px "Press Start 2P", monospace' : '700 40px "Press Start 2P", monospace';
     ctx.strokeStyle = 'rgba(0,0,0,0.8)';
     ctx.lineWidth = 6;
     ctx.strokeText(state.waveBanner.text, canvas.width / 2, canvas.height * 0.35);
-    ctx.fillStyle = '#F0B90B';
+    ctx.fillStyle = state.waveBanner.danger ? '#ff3d7f' : '#F0B90B';
     ctx.fillText(state.waveBanner.text, canvas.width / 2, canvas.height * 0.35);
     ctx.restore();
   }
