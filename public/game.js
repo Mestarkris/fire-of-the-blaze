@@ -266,6 +266,7 @@ function startGame() {
   gameOverScreen.classList.add('hidden');
   gameScreen.classList.remove('hidden');
   GameAudio.resume();
+  GameAudio.preloadVoiceLines(allDialogueAudioUrls());
 
   document.getElementById('avatar').src = me.avatarUrl || '';
   document.getElementById('display-name').textContent = me.displayName || me.username;
@@ -616,6 +617,38 @@ const PLAYER_LINES = {
   ],
 };
 
+// Maps each dialogue line to its pre-generated ElevenLabs mp3 (see
+// scripts/generate-voices.js), keyed by exact line text so pickLine/
+// pickPlayerLine don't need to change - built once from the same DIALOGUE/
+// PLAYER_LINES data the generation script reads, so filenames always match.
+const ENEMY_AUDIO = {};
+Object.entries(DIALOGUE).forEach(([type, moments]) => {
+  ENEMY_AUDIO[type] = {};
+  Object.entries(moments).forEach(([moment, lines]) => {
+    ENEMY_AUDIO[type][moment] = {};
+    lines.forEach((text, i) => {
+      ENEMY_AUDIO[type][moment][text] = `/audio/${type}_${moment}_${i + 1}.mp3`;
+    });
+  });
+});
+
+const PLAYER_AUDIO = {};
+Object.entries(PLAYER_LINES).forEach(([pool, lines]) => {
+  PLAYER_AUDIO[pool] = {};
+  lines.forEach((text, i) => {
+    PLAYER_AUDIO[pool][text] = `/audio/player_${pool}_${i + 1}.mp3`;
+  });
+});
+
+function allDialogueAudioUrls() {
+  const urls = [];
+  Object.values(ENEMY_AUDIO).forEach((moments) => {
+    Object.values(moments).forEach((byText) => urls.push(...Object.values(byText)));
+  });
+  Object.values(PLAYER_AUDIO).forEach((byText) => urls.push(...Object.values(byText)));
+  return urls;
+}
+
 const MAX_SPEECH_BUBBLES = 4;
 const SPEECH_BUBBLE_STAGGER_MS = 350;
 let lastSpeechBubbleAt = 0;
@@ -660,15 +693,13 @@ function trySpawnSpeechBubble(entity, text, opts = {}) {
     isPlayer: !!opts.isPlayer,
   });
 
-  // Audio: boss and player get real synthesized speech; every other enemy
-  // gets a short retro "text-blip" burst instead (typed per-type in audio.js).
-  if (opts.isPlayer) {
-    GameAudio.speakPlayer(text);
-  } else if (opts.big) {
-    GameAudio.speakBoss(text);
-  } else {
-    GameAudio.playDialogueBlips(opts.enemyType);
-  }
+  // Every character speaks its line via a pre-generated ElevenLabs audio file.
+  // Boss/player lines are high priority (always play, can exceed the
+  // concurrency cap); regular enemy lines are the first dropped under load.
+  const audioUrl = opts.isPlayer
+    ? PLAYER_AUDIO[opts.playerPool]?.[text]
+    : ENEMY_AUDIO[opts.enemyType]?.[opts.moment]?.[text];
+  GameAudio.playVoiceLine(audioUrl, opts.isPlayer || opts.big);
 
   return true;
 }
@@ -676,10 +707,11 @@ function trySpawnSpeechBubble(entity, text, opts = {}) {
 // Player lines never overlap - if one's already showing, skip this trigger
 // rather than queueing it, so it can't pile up. Gold border distinguishes
 // player chatter from enemy (gray) and boss (magenta) bubbles.
-function tryPlayerLine(text, duration = 1.8) {
-  if (!text) return false;
+function tryPlayerLine(poolName, duration = 1.8) {
   if (state.speechBubbles.some((b) => b.isPlayer)) return false;
-  return trySpawnSpeechBubble(state.player, text, { duration, isPlayer: true, borderColor: '#F0B90B' });
+  const text = pickPlayerLine(poolName);
+  if (!text) return false;
+  return trySpawnSpeechBubble(state.player, text, { duration, isPlayer: true, borderColor: '#F0B90B', playerPool: poolName });
 }
 
 function onPlayerDamaged() {
@@ -724,7 +756,7 @@ function spawnEnemy(boss = false, forcedType = null) {
     wanderTimer: 0,
   });
   const spawned = state.enemies[state.enemies.length - 1];
-  trySpawnSpeechBubble(spawned, pickLine(type, 'aggro'), { big: boss, borderColor: boss ? '#ff3d7f' : '#2c303a', duration: boss ? 2.5 : 1.8, enemyType: type });
+  trySpawnSpeechBubble(spawned, pickLine(type, 'aggro'), { big: boss, borderColor: boss ? '#ff3d7f' : '#2c303a', duration: boss ? 2.5 : 1.8, enemyType: type, moment: 'aggro' });
 }
 
 // Swarmers arrive in a cluster of 3-4 from the same edge point, not as
@@ -1412,7 +1444,7 @@ function update(dt, now) {
   const before = state.enemies.length;
   state.enemies = state.enemies.filter((e) => {
     if (e.hp > 0) return true;
-    trySpawnSpeechBubble(e, pickLine(e.type, 'death'), { big: e.boss, borderColor: e.boss ? '#ff3d7f' : '#2c303a', duration: e.boss ? 2.5 : 1.8, enemyType: e.type });
+    trySpawnSpeechBubble(e, pickLine(e.type, 'death'), { big: e.boss, borderColor: e.boss ? '#ff3d7f' : '#2c303a', duration: e.boss ? 2.5 : 1.8, enemyType: e.type, moment: 'death' });
     state.score += e.score;
     state.killStreak += 1;
 
@@ -1420,13 +1452,13 @@ function update(dt, now) {
     // that outranks even a streak milestone landing on the same kill. Streak
     // milestones in turn outrank the regular per-type quip chance.
     if (e.boss) {
-      tryPlayerLine(pickPlayerLine('boss'), 2.5);
+      tryPlayerLine('boss', 2.5);
     } else if (state.killStreak > 0 && state.killStreak % 10 === 0) {
-      tryPlayerLine(pickPlayerLine('streak'));
+      tryPlayerLine('streak');
     } else if (e.type === 'sniper' || e.type === 'dasher') {
-      if (Math.random() < 0.25) tryPlayerLine(pickPlayerLine('tougher'));
+      if (Math.random() < 0.25) tryPlayerLine('tougher');
     } else if (Math.random() < 0.25) {
-      tryPlayerLine(pickPlayerLine('general'));
+      tryPlayerLine('general');
     }
     return false;
   });

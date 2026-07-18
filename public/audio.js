@@ -52,7 +52,10 @@ const GameAudio = (() => {
   function toggleMute() {
     muted = !muted;
     if (masterGain) masterGain.gain.value = muted ? 0 : 0.9;
-    if (muted && window.speechSynthesis) window.speechSynthesis.cancel();
+    if (muted) {
+      activeVoiceNodes.forEach((n) => n.pause());
+      activeVoiceNodes.clear();
+    }
     return muted;
   }
 
@@ -147,78 +150,42 @@ const GameAudio = (() => {
     flameGain = null;
   }
 
-  // ---- dialogue blips (Undertale/Animal Crossing style "text-blip") -------
-  // Not real words - just a short burst of tiny beeps timed to a speech
-  // bubble appearing. One config per non-boss enemy type so each personality
-  // reads as audibly distinct even before you read the text. Piggybacks on
-  // the speech-bubble system's own rate limit/stagger for concurrency control
-  // (a blip burst only ever fires alongside a bubble that was actually
-  // allowed to spawn), so no separate pooling/cap bookkeeping is needed here.
-  const BLIP_CONFIGS = {
-    chaser: { base: 340, jitter: 35, wave: 'square', count: 6, gap: 0.07, ascend: 0 },
-    swarmer: { base: 560, jitter: 55, wave: 'square', count: 8, gap: 0.045, ascend: 0 },
-    sniper: { base: 190, jitter: 12, wave: 'triangle', count: 4, gap: 0.13, ascend: 0 },
-    dasher: { base: 300, jitter: 18, wave: 'square', count: 7, gap: 0.05, ascend: 260 },
-  };
+  // ---- pre-generated ElevenLabs voice line playback -----------------------
+  // Real human-sounding audio files (see scripts/generate-voices.js), one per
+  // dialogue line, preloaded once at game start and played via HTMLAudioElement
+  // - up to a few can genuinely overlap now (unlike the single-utterance-at-a-
+  // time SpeechSynthesis approach this replaced).
+  const voiceCache = {}; // url -> preloaded Audio element (template, never played directly)
+  const activeVoiceNodes = new Set(); // currently-playing clones, tracked so mute can stop them
+  const MAX_CONCURRENT_VOICE = 4;
+  let voiceVolume = 0.8;
 
-  function playDialogueBlips(type) {
-    if (!ctx) return;
-    const cfg = BLIP_CONFIGS[type] || BLIP_CONFIGS.chaser;
-    const t0 = ctx.currentTime;
-    for (let i = 0; i < cfg.count; i++) {
-      const t = t0 + i * cfg.gap;
-      const freq2 = cfg.base + (cfg.ascend * i) / cfg.count + (Math.random() * 2 - 1) * cfg.jitter;
-      const osc = ctx.createOscillator();
-      osc.type = cfg.wave;
-      osc.frequency.setValueAtTime(Math.max(60, freq2), t);
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.exponentialRampToValueAtTime(0.22, t + 0.008);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.045);
-      osc.connect(g).connect(sfxGain);
-      osc.start(t);
-      osc.stop(t + 0.05);
-    }
+  function preloadVoiceLines(urls) {
+    urls.forEach((url) => {
+      if (voiceCache[url]) return;
+      const audio = new Audio(url);
+      audio.preload = 'auto';
+      audio.volume = voiceVolume;
+      voiceCache[url] = audio;
+    });
   }
 
-  // ---- real spoken voice for the boss and the player (Web Speech API) ----
-  let voices = [];
-  function loadVoices() {
-    if (window.speechSynthesis) voices = window.speechSynthesis.getVoices();
-  }
-  if (window.speechSynthesis) {
-    loadVoices();
-    window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
-  }
+  // isHighPriority (boss/player) lines always play, even over the concurrency
+  // cap - only regular enemy lines get dropped under load. Missing/failed
+  // files fail silently since the caller's speech bubble already shows the
+  // text regardless of whether audio plays.
+  function playVoiceLine(url, isHighPriority) {
+    if (!url || muted) return;
+    if (!isHighPriority && activeVoiceNodes.size >= MAX_CONCURRENT_VOICE) return;
 
-  function pickEnglishVoice() {
-    if (!voices.length) return null;
-    return voices.find((v) => v.lang && v.lang.startsWith('en')) || voices[0];
-  }
-
-  // Keeps at most one line "in flight" - if something's already speaking or
-  // queued when a new line comes in, drop it in favor of the new one instead
-  // of letting stale lines pile up behind a fast run of kills.
-  function speak(text, pitch, rate) {
-    if (muted || !window.speechSynthesis) return;
-    if (!voices.length) return; // no voices ever became available - skip gracefully, bubble still shows
-    if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
-      window.speechSynthesis.cancel();
-    }
-    const utter = new SpeechSynthesisUtterance(text);
-    utter.pitch = pitch;
-    utter.rate = rate;
-    const voice = pickEnglishVoice();
-    if (voice) utter.voice = voice;
-    window.speechSynthesis.speak(utter);
-  }
-
-  function speakBoss(text) {
-    speak(text, 0.7, 0.9);
-  }
-
-  function speakPlayer(text) {
-    speak(text, 1.08, 1.1);
+    const template = voiceCache[url];
+    const node = template ? template.cloneNode(true) : new Audio(url);
+    node.volume = voiceVolume;
+    activeVoiceNodes.add(node);
+    const release = () => activeVoiceNodes.delete(node);
+    node.addEventListener('ended', release, { once: true });
+    node.addEventListener('error', release, { once: true });
+    node.play().catch(release); // e.g. file missing or a stray autoplay block
   }
 
   // ---- background music ---------------------------------------------------
@@ -306,9 +273,8 @@ const GameAudio = (() => {
     stopBeamHum,
     startFlameHiss,
     stopFlameHiss,
-    playDialogueBlips,
-    speakBoss,
-    speakPlayer,
+    preloadVoiceLines,
+    playVoiceLine,
   };
 })();
 
