@@ -201,13 +201,14 @@ function fitBubbleFont(ctx, text, maxWidth, baseSize, minSize) {
 }
 
 // Pixel-style speech bubble with a downward-pointing tail, anchored above
-// (x, y) - the tip of the tail sits at (x, y). Fades via `alpha`; bosses get
-// a bigger, magenta-bordered variant so their lines read as more special.
-function drawSpeechBubble(ctx, x, y, text, alpha, isBoss) {
+// (x, y) - the tip of the tail sits at (x, y). Fades via `alpha`. `big`
+// (enemy boss lines) gets a larger box; `borderColor` lets callers distinguish
+// enemy (gray), boss (magenta), and player (gold) bubbles independently.
+function drawSpeechBubble(ctx, x, y, text, alpha, { big = false, borderColor = '#2c303a' } = {}) {
   ctx.save();
-  const maxWidth = isBoss ? 230 : 175;
-  const baseSize = isBoss ? 12 : 9;
-  const minSize = isBoss ? 8 : 6;
+  const maxWidth = big ? 230 : 175;
+  const baseSize = big ? 12 : 9;
+  const minSize = big ? 8 : 6;
   const { fontSize } = fitBubbleFont(ctx, text, maxWidth, baseSize, minSize);
   const padX = 10, padY = 7;
   const textWidth = ctx.measureText(text).width;
@@ -219,8 +220,8 @@ function drawSpeechBubble(ctx, x, y, text, alpha, isBoss) {
 
   ctx.globalAlpha = alpha;
   ctx.fillStyle = 'rgba(11,12,15,0.88)';
-  ctx.strokeStyle = isBoss ? '#ff3d7f' : '#2c303a';
-  ctx.lineWidth = isBoss ? 2 : 1;
+  ctx.strokeStyle = borderColor;
+  ctx.lineWidth = big ? 2 : 1;
 
   ctx.beginPath();
   ctx.moveTo(boxX + r, boxY);

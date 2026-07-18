@@ -595,29 +595,49 @@ const DIALOGUE = {
   },
 };
 
-const PLAYER_KILL_LINES = ['Not today!', 'Next!', 'Too easy.', 'Chat, did you see that?'];
-const PLAYER_STREAK_LINES = ["I'm just getting started!", 'Someone stop me!'];
-const PLAYER_DAMAGE_LINES = ['Okay, that one hurt.', 'Rude.', 'Chat, help me out here!'];
+const PLAYER_LINES = {
+  general: [
+    'Not today!', 'Stay down!', 'Too easy.', 'Next!', "That's what you get!",
+    "Don't test me!", 'One less problem.', 'Move along!', 'Is that all?',
+    'You never stood a chance.', 'Get wrecked!', 'End of the line.',
+    "Should've stayed home.", 'Try harder.', 'Weak.',
+  ],
+  streak: [
+    "I'm just getting started!", 'Someone stop me!',
+    'They keep coming, I keep winning!', 'This is too easy!',
+    'Unstoppable!', "You're all going down!",
+  ],
+  tougher: [
+    'Nice try.', 'Not fast enough!', 'Missed your shot.', "Should've aimed better.",
+  ],
+  boss: [
+    "That's how it's done!", "Domain's mine now!", 'You call that unstoppable?',
+    'Nothing can stop me!', 'Game over for you!',
+  ],
+};
 
 const MAX_SPEECH_BUBBLES = 4;
 const SPEECH_BUBBLE_STAGGER_MS = 350;
 let lastSpeechBubbleAt = 0;
 let lastLineIndex = {};
 
-function pickRandom(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-// Picks a random line from DIALOGUE[type][moment], avoiding an immediate
-// repeat of the last line used for that same type + moment combo.
-function pickLine(type, moment) {
-  const pool = DIALOGUE[type]?.[moment];
+// Picks a random line from `pool`, avoiding an immediate repeat of the last
+// line used for that same `key` (shared by both enemy DIALOGUE lookups and
+// PLAYER_LINES pools so neither system repeats itself back-to-back).
+function pickFromPool(pool, key) {
   if (!pool || pool.length === 0) return null;
-  const key = `${type}:${moment}`;
   let idx = Math.floor(Math.random() * pool.length);
   if (pool.length > 1 && idx === lastLineIndex[key]) idx = (idx + 1) % pool.length;
   lastLineIndex[key] = idx;
   return pool[idx];
+}
+
+function pickLine(type, moment) {
+  return pickFromPool(DIALOGUE[type]?.[moment], `${type}:${moment}`);
+}
+
+function pickPlayerLine(poolName) {
+  return pickFromPool(PLAYER_LINES[poolName], `player:${poolName}`);
 }
 
 // entity needs x/y (read live if still around, frozen at last value once
@@ -635,22 +655,35 @@ function trySpawnSpeechBubble(entity, text, opts = {}) {
     text,
     age: 0,
     duration: opts.duration || 1.8,
-    boss: !!opts.boss,
+    big: !!opts.big,
+    borderColor: opts.borderColor || '#2c303a',
     isPlayer: !!opts.isPlayer,
   });
+
+  // Audio: boss and player get real synthesized speech; every other enemy
+  // gets a short retro "text-blip" burst instead (typed per-type in audio.js).
+  if (opts.isPlayer) {
+    GameAudio.speakPlayer(text);
+  } else if (opts.big) {
+    GameAudio.speakBoss(text);
+  } else {
+    GameAudio.playDialogueBlips(opts.enemyType);
+  }
+
   return true;
 }
 
 // Player lines never overlap - if one's already showing, skip this trigger
-// rather than queueing it, so it can't pile up.
+// rather than queueing it, so it can't pile up. Gold border distinguishes
+// player chatter from enemy (gray) and boss (magenta) bubbles.
 function tryPlayerLine(text, duration = 1.8) {
+  if (!text) return false;
   if (state.speechBubbles.some((b) => b.isPlayer)) return false;
-  return trySpawnSpeechBubble(state.player, text, { duration, isPlayer: true });
+  return trySpawnSpeechBubble(state.player, text, { duration, isPlayer: true, borderColor: '#F0B90B' });
 }
 
 function onPlayerDamaged() {
   state.killStreak = 0;
-  tryPlayerLine(pickRandom(PLAYER_DAMAGE_LINES));
 }
 
 function spawnEnemy(boss = false, forcedType = null) {
@@ -691,7 +724,7 @@ function spawnEnemy(boss = false, forcedType = null) {
     wanderTimer: 0,
   });
   const spawned = state.enemies[state.enemies.length - 1];
-  trySpawnSpeechBubble(spawned, pickLine(type, 'aggro'), { boss, duration: boss ? 2.5 : 1.8 });
+  trySpawnSpeechBubble(spawned, pickLine(type, 'aggro'), { big: boss, borderColor: boss ? '#ff3d7f' : '#2c303a', duration: boss ? 2.5 : 1.8, enemyType: type });
 }
 
 // Swarmers arrive in a cluster of 3-4 from the same edge point, not as
@@ -1379,13 +1412,21 @@ function update(dt, now) {
   const before = state.enemies.length;
   state.enemies = state.enemies.filter((e) => {
     if (e.hp > 0) return true;
-    trySpawnSpeechBubble(e, pickLine(e.type, 'death'), { boss: e.boss, duration: e.boss ? 2.5 : 1.8 });
+    trySpawnSpeechBubble(e, pickLine(e.type, 'death'), { big: e.boss, borderColor: e.boss ? '#ff3d7f' : '#2c303a', duration: e.boss ? 2.5 : 1.8, enemyType: e.type });
     state.score += e.score;
     state.killStreak += 1;
-    if (state.killStreak > 0 && state.killStreak % 10 === 0) {
-      tryPlayerLine(pickRandom(PLAYER_STREAK_LINES));
+
+    // Boss kills always get a guaranteed line - a bigger, rarer payoff moment
+    // that outranks even a streak milestone landing on the same kill. Streak
+    // milestones in turn outrank the regular per-type quip chance.
+    if (e.boss) {
+      tryPlayerLine(pickPlayerLine('boss'), 2.5);
+    } else if (state.killStreak > 0 && state.killStreak % 10 === 0) {
+      tryPlayerLine(pickPlayerLine('streak'));
+    } else if (e.type === 'sniper' || e.type === 'dasher') {
+      if (Math.random() < 0.25) tryPlayerLine(pickPlayerLine('tougher'));
     } else if (Math.random() < 0.25) {
-      tryPlayerLine(pickRandom(PLAYER_KILL_LINES));
+      tryPlayerLine(pickPlayerLine('general'));
     }
     return false;
   });
@@ -1819,7 +1860,7 @@ function render() {
     const alpha = t < 0.6 ? 1 : Math.max(0, 1 - (t - 0.6) / 0.4);
     const floatUp = 10 * Math.min(1, t / 0.4) + 6 * t;
     const headR = b.follow.r || 16;
-    drawSpeechBubble(ctx, b.follow.x, b.follow.y - headR - 10 - floatUp, b.text, alpha, b.boss);
+    drawSpeechBubble(ctx, b.follow.x, b.follow.y - headR - 10 - floatUp, b.text, alpha, { big: b.big, borderColor: b.borderColor });
   });
 
   ctx.restore();
