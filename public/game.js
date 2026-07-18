@@ -716,6 +716,7 @@ function tryPlayerLine(poolName, duration = 1.8) {
 
 function onPlayerDamaged() {
   state.killStreak = 0;
+  GameAudio.playPlayerHit();
 }
 
 function spawnEnemy(boss = false, forcedType = null) {
@@ -1930,6 +1931,7 @@ async function gameOver() {
   state.running = false;
   GameAudio.stopBeamHum();
   GameAudio.stopFlameHiss();
+  GameAudio.playGameOver();
   gameScreen.classList.add('hidden');
   gameOverScreen.classList.remove('hidden');
   document.getElementById('final-score').textContent = `Score: ${state.score}`;

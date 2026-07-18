@@ -105,6 +105,47 @@ const GameAudio = (() => {
     noiseBurst(sfxGain, t, big ? 0.24 : punchy ? 0.09 : 0.045, big ? 0.7 : punchy ? 0.5 : 0.3);
   }
 
+  // ---- player took damage (contact or sniper shot) -----------------------
+  // A dull, low thump distinct from gunshots (which are sharp/high) - reads
+  // as "you got hit" rather than "you fired a weapon".
+  function playPlayerHit() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(180, t);
+    osc.frequency.exponentialRampToValueAtTime(60, t + 0.18);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.6, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+    osc.connect(g).connect(sfxGain);
+    osc.start(t);
+    osc.stop(t + 0.22);
+
+    noiseBurst(sfxGain, t, 0.12, 0.5, 'lowpass', 900);
+  }
+
+  // ---- game over - a short, distinct descending "womp" jingle -----------
+  function playGameOver() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const notes = [392, 330, 262, 196]; // G4-E4-C4-G3, a simple descending fall
+    notes.forEach((freq, i) => {
+      const start = t + i * 0.16;
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(freq, start);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, start);
+      g.gain.exponentialRampToValueAtTime(0.35, start + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, start + 0.4);
+      osc.connect(g).connect(sfxGain);
+      osc.start(start);
+      osc.stop(start + 0.42);
+    });
+  }
+
   // ---- continuous weapon sounds (electric beam / flamethrower) ----------
   let beamOsc = null, beamGain = null;
   function startBeamHum() {
@@ -288,6 +329,8 @@ const GameAudio = (() => {
     resume,
     toggleMute,
     playShot,
+    playPlayerHit,
+    playGameOver,
     startBeamHum,
     stopBeamHum,
     startFlameHiss,
