@@ -450,9 +450,22 @@ function handleBlazeEvent(type, payload) {
       } else if (text.startsWith('!slow')) {
         state.slowUntil = performance.now() + 5000;
         pushTicker(name, 'slowed every enemy', true);
+      } else if (text.startsWith('!testtip')) {
+        // TEST-ONLY DEBUG SHORTCUT: simulates a channel.thanks (tip) event
+        // locally, since real on-chain tips are hard to trigger on demand
+        // while developing. Consider removing this chat command before a
+        // real public launch so viewers can't fake tip tiers for free.
+        const amount = Number(text.split(' ')[1]) || 25;
+        handleTip(name, amount);
       } else {
         pushTicker(name, payload.message);
       }
+      break;
+    }
+    case 'channel.thanks': {
+      const name = payload.sender?.displayName || 'a viewer';
+      const amount = Number(payload.amount) || 0;
+      handleTip(name, amount);
       break;
     }
     case 'channel.follow': {
@@ -482,6 +495,28 @@ function handleBlazeEvent(type, payload) {
       pushTicker(name, `voted ${amount} - horde of ${count} summoned`, true);
       break;
     }
+  }
+}
+
+// Tip tiers - Blaze's channel.thanks docs don't specify a currency/unit for
+// `amount` (their own example payload just uses "100"), so these thresholds
+// are a starting guess: small < 50, medium 50-199, large 200+. Adjust once
+// you know what a typical real tip amount looks like on your channel.
+const TIP_TIER_MEDIUM = 50;
+const TIP_TIER_LARGE = 200;
+
+function handleTip(name, amount) {
+  if (amount >= TIP_TIER_LARGE) {
+    triggerBossWave();
+    state.waveBanner = { text: `MEGA TIP - ${name}!`, elapsed: 0, duration: 2.6, active: true };
+    pushTicker(name, `tipped ${amount} - MEGA TIP! Boss wave!`, true);
+  } else if (amount >= TIP_TIER_MEDIUM) {
+    state.weapon = 'electric';
+    state.weaponUntil = performance.now() + WEAPON_DURATION_MS;
+    pushTicker(name, `tipped ${amount} - electric gun unlocked for 15s!`, true);
+  } else {
+    spawnEnemy(false, 'loot');
+    pushTicker(name, `tipped ${amount} - bonus loot enemy incoming!`, true);
   }
 }
 
@@ -520,6 +555,9 @@ const ENEMY_ARCHETYPES = {
   dasher: { r: 13, hp: 2, speedRange: [55, 70], color: '#ff8a3d', score: 20 },
   swarmer: { r: 8, hp: 1, speedRange: [150, 180], color: '#2dd4a8', score: 8 },
   boss: { r: 30, hp: 12, speedRange: [70, 70], color: '#ff3d7f', score: 50 },
+  // Loot enemy - spawned only by small tips (never in the normal random pool),
+  // one-hit-kill with a big score payout so grabbing it feels like a reward.
+  loot: { r: 14, hp: 1, speedRange: [70, 100], color: '#fff6c8', score: 75 },
 };
 
 function spawnEnemy(boss = false, forcedType = null) {
@@ -1542,6 +1580,14 @@ function render() {
     if (e.type === 'dasher' && e.dashMode === 'telegraph') {
       const progress = 1 - Math.min(1, e.dashTimer / 0.5);
       size *= 1 - 0.35 * Math.sin(progress * Math.PI);
+    }
+    if (e.type === 'loot') {
+      const pulse = 0.6 + 0.4 * Math.sin(now * 6);
+      const glow = ctx.createRadialGradient(e.x, e.y + bob, 2, e.x, e.y + bob, size * 0.9);
+      glow.addColorStop(0, `rgba(255,244,200,${0.5 * pulse})`);
+      glow.addColorStop(1, 'rgba(255,244,200,0)');
+      ctx.fillStyle = glow;
+      ctx.fillRect(e.x - size, e.y + bob - size, size * 2, size * 2);
     }
     drawSprite(ctx, sprite, e.x, e.y + bob, size, e.facingLeft);
     if (e.hitFlash > 0) {

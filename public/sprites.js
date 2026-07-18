@@ -16,6 +16,9 @@ const PALETTES = {
   sniper: { '#': '#241033', A: '#8b5cf6', B: '#5b3a99', C: '#e0d4ff' },
   dasher: { '#': '#331a05', A: '#ff8a3d', B: '#b35a1f', C: '#ffe0b0' },
   swarmer: { '#': '#0a2e28', A: '#2dd4a8', B: '#1a8a6b', C: '#c8fff0' },
+  // Loot enemy (spawned by small tips) - same silhouette as the base enemy
+  // but a bright gold-white palette so it reads as a juicy bonus target.
+  loot: { '#': '#4a3a00', A: '#fff6c8', B: '#ffcf3d', C: '#ffffff' },
 };
 
 // Player, frame 1 (legs together) - 10x10
@@ -147,6 +150,7 @@ const SPRITES = {
   sniper: renderSpriteToCanvas(SNIPER, PALETTES.sniper),
   dasher: renderSpriteToCanvas(DASHER, PALETTES.dasher),
   swarmer: renderSpriteToCanvas(SWARMER, PALETTES.swarmer),
+  loot: renderSpriteToCanvas(ENEMY, PALETTES.loot),
 };
 
 // Draw a sprite centered at (x, y), optionally flipped horizontally,

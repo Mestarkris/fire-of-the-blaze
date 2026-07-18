@@ -195,6 +195,7 @@ async function subscribeToChannelEvents(accessToken, channelId, sessionId) {
     'channel.subscribe',
     'channel.subscription.gift',
     'channel.vote',
+    'channel.thanks', // on-chain tips - see https://dev.blaze.stream/docs/events/websocket-events
   ];
 
   for (const type of eventTypes) {
