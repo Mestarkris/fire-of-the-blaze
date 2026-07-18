@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#0b0c0f" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>Fire of the Blaze</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="login-screen" class="screen war-theme">
+  <div class="war-bg">
+    <div class="war-glow war-glow-a"></div>
+    <div class="war-glow war-glow-b"></div>
+    <div class="war-smoke war-smoke-a"></div>
+    <div class="war-smoke war-smoke-b"></div>
+    <div class="fire-layer">
+      <div class="flame"></div><div class="flame"></div><div class="flame"></div><div class="flame"></div>
+      <div class="flame"></div><div class="flame"></div><div class="flame"></div><div class="flame"></div>
+    </div>
+    <div class="war-wire"></div>
+    <div class="embers">
+      <span class="ember" style="--left:4%; --delay:0s; --dur:4.5s; --drift:14px;"></span>
+      <span class="ember" style="--left:12%; --delay:.6s; --dur:5.2s; --drift:-10px;"></span>
+      <span class="ember" style="--left:20%; --delay:1.2s; --dur:4s; --drift:18px;"></span>
+      <span class="ember" style="--left:28%; --delay:1.8s; --dur:5.8s; --drift:-16px;"></span>
+      <span class="ember" style="--left:36%; --delay:2.4s; --dur:4.7s; --drift:8px;"></span>
+      <span class="ember" style="--left:44%; --delay:3s; --dur:5.5s; --drift:-6px;"></span>
+      <span class="ember" style="--left:52%; --delay:3.6s; --dur:4.2s; --drift:20px;"></span>
+      <span class="ember" style="--left:60%; --delay:4.2s; --dur:6s; --drift:-12px;"></span>
+      <span class="ember" style="--left:68%; --delay:.3s; --dur:4.9s; --drift:10px;"></span>
+      <span class="ember" style="--left:76%; --delay:.9s; --dur:5s; --drift:-18px;"></span>
+      <span class="ember" style="--left:84%; --delay:1.5s; --dur:4.4s; --drift:6px;"></span>
+      <span class="ember" style="--left:92%; --delay:2.1s; --dur:5.6s; --drift:-8px;"></span>
+    </div>
+  </div>
+  <div class="login-card">
+    <div class="brand">
+      <span class="brand-mark">◆</span>
+      <span class="brand-name">FIRE OF THE BLAZE</span>
+    </div>
+    <p class="tagline">Your chat is the game master.</p>
+    <p class="sub">Log in with Blaze. Every message, follow, sub, and vote in your live chat changes what happens in the arena.</p>
+    <a href="/auth/login" class="login-btn">Log in with Blaze</a>
+    <div class="rules">
+      <div class="rule"><span class="tag">!spawn</span> throws in another enemy</div>
+      <div class="rule"><span class="tag">!heal</span> restores 20 HP</div>
+      <div class="rule"><span class="tag">!shield</span> 3s of invincibility</div>
+      <div class="rule"><span class="tag">!slow</span> slows every enemy for 5s</div>
+      <div class="rule"><span class="tag">follow</span> spawns a fighting ally</div>
+      <div class="rule"><span class="tag">sub / gift</span> triggers a boss wave</div>
+      <div class="rule"><span class="tag">vote</span> summons a horde sized to the vote</div>
+    </div>
+  </div>
+</div>
+
+<div id="start-screen" class="screen war-theme hidden">
+  <div class="war-bg">
+    <div class="war-glow war-glow-a"></div>
+    <div class="war-glow war-glow-b"></div>
+    <div class="war-smoke war-smoke-a"></div>
+    <div class="war-smoke war-smoke-b"></div>
+    <div class="fire-layer">
+      <div class="flame"></div><div class="flame"></div><div class="flame"></div><div class="flame"></div>
+      <div class="flame"></div><div class="flame"></div><div class="flame"></div><div class="flame"></div>
+    </div>
+    <div class="war-wire"></div>
+    <div class="embers">
+      <span class="ember" style="--left:4%; --delay:0s; --dur:4.5s; --drift:14px;"></span>
+      <span class="ember" style="--left:12%; --delay:.6s; --dur:5.2s; --drift:-10px;"></span>
+      <span class="ember" style="--left:20%; --delay:1.2s; --dur:4s; --drift:18px;"></span>
+      <span class="ember" style="--left:28%; --delay:1.8s; --dur:5.8s; --drift:-16px;"></span>
+      <span class="ember" style="--left:36%; --delay:2.4s; --dur:4.7s; --drift:8px;"></span>
+      <span class="ember" style="--left:44%; --delay:3s; --dur:5.5s; --drift:-6px;"></span>
+      <span class="ember" style="--left:52%; --delay:3.6s; --dur:4.2s; --drift:20px;"></span>
+      <span class="ember" style="--left:60%; --delay:4.2s; --dur:6s; --drift:-12px;"></span>
+      <span class="ember" style="--left:68%; --delay:.3s; --dur:4.9s; --drift:10px;"></span>
+      <span class="ember" style="--left:76%; --delay:.9s; --dur:5s; --drift:-18px;"></span>
+      <span class="ember" style="--left:84%; --delay:1.5s; --dur:4.4s; --drift:6px;"></span>
+      <span class="ember" style="--left:92%; --delay:2.1s; --dur:5.6s; --drift:-8px;"></span>
+    </div>
+  </div>
+  <div class="login-card start-card">
+    <div class="brand">
+      <span class="brand-mark">◆</span>
+      <span class="brand-name hero">FIRE OF THE BLAZE</span>
+    </div>
+    <p class="tagline">Your chat is the game master.</p>
+    <div class="start-profile">
+      <img id="start-avatar" class="avatar" alt="" />
+      <span id="start-name" class="hud-name"></span>
+    </div>
+    <button id="play-btn" class="login-btn play-btn">Play Game</button>
+  </div>
+</div>
+
+<div id="game-screen" class="screen hidden">
+  <div id="hud">
+    <div class="hud-left">
+      <img id="avatar" class="avatar" alt="" />
+      <div class="hud-stack">
+        <span id="display-name" class="hud-name"></span>
+        <span class="hud-label">STREAMER</span>
+      </div>
+    </div>
+    <div class="hud-center">
+      <div class="health-track"><div id="health-fill" class="health-fill"></div></div>
+      <span id="health-text">100 HP</span>
+    </div>
+    <div class="hud-right">
+      <button id="pause-btn" class="mute-btn" aria-label="Pause">&#9208;</button>
+      <button id="mute-btn" class="mute-btn" aria-label="Toggle sound">&#128266;</button>
+      <span id="score" class="score">0</span>
+      <span class="hud-label">SCORE</span>
+    </div>
+  </div>
+
+  <canvas id="game-canvas"></canvas>
+  <div class="scanlines"></div>
+
+  <div id="connection-pill" class="pill">connecting to Blaze…</div>
+  <div id="wave-badge" class="pill wave-pill">WAVE 1</div>
+  <div id="weapon-badge" class="pill weapon-pill hidden">
+    <span id="weapon-name">SPREAD</span>
+    <div class="weapon-bar-track"><div id="weapon-bar" class="weapon-bar-fill"></div></div>
+  </div>
+  <div id="shield-badge" class="pill shield-pill ready">SHIELD READY</div>
+
+  <div id="mobile-controls" class="mobile-controls hidden">
+    <div id="joystick-base" class="joystick-base">
+      <div id="joystick-knob" class="joystick-knob"></div>
+    </div>
+    <button id="shoot-btn" class="shoot-btn" aria-label="Shoot">&#9670;</button>
+    <button id="shield-btn" class="shield-btn ready" aria-label="Shield">&#9679;</button>
+  </div>
+
+  <div id="ticker" class="ticker"></div>
+
+  <div id="pause-screen" class="pause-overlay hidden">
+    <div class="login-card pause-card">
+      <div class="brand"><span class="brand-mark">◆</span><span class="brand-name">PAUSED</span></div>
+      <button id="resume-btn" class="login-btn" style="border:none;cursor:pointer;">Resume</button>
+      <button id="quit-btn" class="login-btn quit-btn" style="border:none;cursor:pointer;">Quit to Menu</button>
+    </div>
+  </div>
+</div>
+
+<div id="gameover-screen" class="screen hidden">
+  <div class="login-card">
+    <div class="brand"><span class="brand-mark">◆</span><span class="brand-name">RUN OVER</span></div>
+    <p class="tagline" id="final-score">Score: 0</p>
+    <button id="restart-btn" class="login-btn" style="border:none;cursor:pointer;">Run it back</button>
+    <div id="leaderboard" class="leaderboard"></div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="sprites.js"></script>
+<script src="audio.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
