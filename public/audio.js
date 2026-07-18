@@ -53,8 +53,9 @@ const GameAudio = (() => {
     muted = !muted;
     if (masterGain) masterGain.gain.value = muted ? 0 : 0.9;
     if (muted) {
-      activeVoiceNodes.forEach((n) => n.pause());
-      activeVoiceNodes.clear();
+      if (currentVoiceNode) currentVoiceNode.pause();
+      currentVoiceNode = null;
+      voiceQueue = [];
     }
     return muted;
   }
@@ -151,14 +152,16 @@ const GameAudio = (() => {
   }
 
   // ---- pre-generated ElevenLabs voice line playback -----------------------
-  // Real human-sounding audio files (see scripts/generate-voices.js), one per
-  // dialogue line, preloaded once at game start and played via HTMLAudioElement
-  // - up to a few can genuinely overlap now (unlike the single-utterance-at-a-
-  // time SpeechSynthesis approach this replaced).
+  // Real audio files (see scripts/generate-voices.js), one per dialogue line,
+  // preloaded once at game start. Only ONE plays at a time across the whole
+  // game via a small self-managed queue - overlapping voices just read as
+  // noise, so every triggered line either plays immediately (nothing else is
+  // speaking), waits in line, or gets dropped if the line's already long.
   const voiceCache = {}; // url -> preloaded Audio element (template, never played directly)
-  const activeVoiceNodes = new Set(); // currently-playing clones, tracked so mute can stop them
-  const MAX_CONCURRENT_VOICE = 4;
   let voiceVolume = 0.8;
+  const MAX_QUEUED_VOICE = 5;
+  let currentVoiceNode = null;
+  let voiceQueue = []; // { url }
 
   function preloadVoiceLines(urls) {
     urls.forEach((url) => {
@@ -170,22 +173,38 @@ const GameAudio = (() => {
     });
   }
 
-  // isHighPriority (boss/player) lines always play, even over the concurrency
-  // cap - only regular enemy lines get dropped under load. Missing/failed
-  // files fail silently since the caller's speech bubble already shows the
-  // text regardless of whether audio plays.
-  function playVoiceLine(url, isHighPriority) {
-    if (!url || muted) return;
-    if (!isHighPriority && activeVoiceNodes.size >= MAX_CONCURRENT_VOICE) return;
-
+  function playUrlNow(url) {
     const template = voiceCache[url];
     const node = template ? template.cloneNode(true) : new Audio(url);
     node.volume = voiceVolume;
-    activeVoiceNodes.add(node);
-    const release = () => activeVoiceNodes.delete(node);
-    node.addEventListener('ended', release, { once: true });
-    node.addEventListener('error', release, { once: true });
-    node.play().catch(release); // e.g. file missing or a stray autoplay block
+    currentVoiceNode = node;
+    const advance = () => {
+      // Guards against a stray late event from a node that's no longer the
+      // current one (e.g. both 'ended' and 'error' firing) double-advancing.
+      if (currentVoiceNode !== node) return;
+      currentVoiceNode = null;
+      if (voiceQueue.length) playUrlNow(voiceQueue.shift().url);
+    };
+    node.addEventListener('ended', advance, { once: true });
+    node.addEventListener('error', advance, { once: true });
+    node.play().catch(advance); // e.g. file missing or a stray autoplay block
+  }
+
+  // isHighPriority (boss/player) lines jump to the front of the queue so they
+  // speak next rather than waiting behind a pile of enemy chatter - they're
+  // still subject to the same queue cap as everything else, just placed at
+  // the head of it instead of the tail. Missing/failed files and drops both
+  // fail silently since the caller's speech bubble already shows the text
+  // regardless of whether its audio plays.
+  function playVoiceLine(url, isHighPriority) {
+    if (!url || muted) return;
+    if (!currentVoiceNode) {
+      playUrlNow(url);
+      return;
+    }
+    if (voiceQueue.length >= MAX_QUEUED_VOICE) return; // busy - drop this one
+    if (isHighPriority) voiceQueue.unshift({ url });
+    else voiceQueue.push({ url });
   }
 
   // ---- background music ---------------------------------------------------
