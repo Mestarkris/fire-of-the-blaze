@@ -1,5 +1,7 @@
 # Fire of the Blaze
 
+**Live: [fireoftheblaze.fun](https://fireoftheblaze.fun)**
+
 A 2D top-down arena shooter where your **live Blaze chat is the game master**.
 Built for the [Blaze Builder Challenge](https://backstage.blaze.stream/announcing-the-blaze-builder-challenge/).
 
