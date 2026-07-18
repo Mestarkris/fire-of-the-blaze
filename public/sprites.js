@@ -179,39 +179,40 @@ function drawGun(ctx, x, y, angle, color) {
   ctx.restore();
 }
 
-// Breaks text into lines no wider than maxWidth (word-wrap), since canvas
-// text has no built-in wrapping. ctx.font must already be set before calling.
-function wrapBubbleText(ctx, text, maxWidth) {
-  const words = text.split(' ');
-  const lines = [];
-  let current = '';
-  words.forEach((word) => {
-    const test = current ? `${current} ${word}` : word;
-    if (current && ctx.measureText(test).width > maxWidth) {
-      lines.push(current);
-      current = word;
-    } else {
-      current = test;
-    }
-  });
-  if (current) lines.push(current);
-  return lines;
+// Finds a font size (and, as a last resort, a narrower fallback family) that
+// fits `text` on a single line within maxWidth, shrinking rather than
+// truncating. ctx.font is left set to the winning size/family on return.
+function fitBubbleFont(ctx, text, maxWidth, baseSize, minSize) {
+  let fontFamily = "'Press Start 2P', monospace";
+  for (let size = baseSize; size >= minSize; size--) {
+    ctx.font = `${size}px ${fontFamily}`;
+    if (ctx.measureText(text).width <= maxWidth) return { fontSize: size, fontFamily };
+  }
+  // Still too wide even at the blocky pixel font's smallest readable size -
+  // a compact sans-serif packs the same characters into less width.
+  fontFamily = "'JetBrains Mono', monospace";
+  for (let size = baseSize; size >= minSize - 2; size--) {
+    ctx.font = `${size}px ${fontFamily}`;
+    if (ctx.measureText(text).width <= maxWidth) return { fontSize: size, fontFamily };
+  }
+  const fontSize = minSize - 2;
+  ctx.font = `${fontSize}px ${fontFamily}`;
+  return { fontSize, fontFamily };
 }
 
 // Pixel-style speech bubble with a downward-pointing tail, anchored above
 // (x, y) - the tip of the tail sits at (x, y). Fades via `alpha`; bosses get
 // a bigger, magenta-bordered variant so their lines read as more special.
 function drawSpeechBubble(ctx, x, y, text, alpha, isBoss) {
-  const fontSize = isBoss ? 11 : 8;
   ctx.save();
-  ctx.font = `${fontSize}px 'Press Start 2P', monospace`;
-  const maxWidth = isBoss ? 190 : 130;
-  const lines = wrapBubbleText(ctx, text, maxWidth);
-  const lineHeight = fontSize + 6;
+  const maxWidth = isBoss ? 230 : 175;
+  const baseSize = isBoss ? 12 : 9;
+  const minSize = isBoss ? 8 : 6;
+  const { fontSize } = fitBubbleFont(ctx, text, maxWidth, baseSize, minSize);
   const padX = 10, padY = 7;
-  const textWidth = Math.max(...lines.map((l) => ctx.measureText(l).width));
+  const textWidth = ctx.measureText(text).width;
   const boxW = textWidth + padX * 2;
-  const boxH = lines.length * lineHeight + padY * 2 - (lineHeight - fontSize);
+  const boxH = fontSize + padY * 2;
   const boxX = x - boxW / 2;
   const boxY = y - boxH;
   const r = 4;
@@ -246,9 +247,7 @@ function drawSpeechBubble(ctx, x, y, text, alpha, isBoss) {
   ctx.fillStyle = '#eef0f3';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  lines.forEach((line, i) => {
-    ctx.fillText(line, x, boxY + padY + lineHeight * i + fontSize / 2);
-  });
+  ctx.fillText(text, x, boxY + boxH / 2);
 
   ctx.restore();
 }

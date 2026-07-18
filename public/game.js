@@ -572,26 +572,26 @@ const ENEMY_ARCHETYPES = {
 // kills (occasionally), kill-streak milestones, and taking damage.
 // ---------------------------------------------------------------------------
 
-const ENEMY_LINES = {
+const DIALOGUE = {
   chaser: {
-    spawn: ['There he is!', "Don't let him breathe!", 'Swarm him!', 'No mercy today!'],
-    death: ['Tell my mom I—', 'Worth it...', 'This wasn\'t in the job description', 'Ow. Rude.'],
+    aggro: ["You're already dead!", 'Rip him apart!', 'No escape this time!', 'Feel this!', 'Crush him now!'],
+    death: ["This isn't over!", 'You got lucky!', "I'll be back for you!", 'Damn you!', 'Not like this!'],
   },
   sniper: {
-    spawn: ["I've got the shot.", 'Hold still, hero.', "Line 'em up..."],
-    death: ['I had... a scope discount coming...', "Should've brought a bigger gun", 'This is why I work remote'],
+    aggro: ['You\'re in my sights.', "One shot, that's all I need.", 'Run if you can.', 'I never miss.', 'Say goodbye.'],
+    death: ['Impossible...', 'How did you find me?!', "This can't be happening!", "You'll regret this!", 'Damn my aim!'],
   },
   dasher: {
-    spawn: ['Ready... set...', "Can't catch what you can't see!", 'Blink and you\'re mine!'],
-    death: ['Too... fast... for my own good', 'I regret nothing! Mostly.'],
+    aggro: ["You can't outrun me!", "I'll tear through you!", 'Too late to run!', 'Here I come, fast and furious!', "You won't see it coming!"],
+    death: ['Too fast for my own good!', "This isn't the end!", "You'll pay for this!", 'Argh! Not now!', 'I almost had you!'],
   },
   swarmer: {
-    spawn: ['We outnumber him!', 'Pile on!', 'Strength in numbers!'],
-    death: ['Aw, man.', 'Worth a shot.', 'Tell the others...'],
+    aggro: ['Overwhelm him!', "We're endless!", "You can't fight us all!", 'Attack together!', 'Bring him down!'],
+    death: ["There's more of us!", "You'll never survive this!", "We'll swarm you again!", 'Argh!', 'Not the last of us!'],
   },
   boss: {
-    spawn: ["You've made a mistake showing up.", "Let's see what you're made of.", 'This ends here, streamer.'],
-    death: ['Impossible... this can\'t be how it ends...', "You'll pay for this, eventually. Probably.", 'Tell chat... I said hi.'],
+    aggro: ['You dare challenge me?!', 'Prepare to be destroyed!', "I'll end you myself!", 'This is my domain!', 'You have no chance!'],
+    death: ['Impossible! I am unstoppable!', "This isn't over, hero!", "You'll face my wrath again!", 'Curse you!', "I'll return stronger!"],
   },
 };
 
@@ -608,10 +608,10 @@ function pickRandom(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-// Picks a random line from ENEMY_LINES[type][moment], avoiding an immediate
+// Picks a random line from DIALOGUE[type][moment], avoiding an immediate
 // repeat of the last line used for that same type + moment combo.
 function pickLine(type, moment) {
-  const pool = ENEMY_LINES[type]?.[moment];
+  const pool = DIALOGUE[type]?.[moment];
   if (!pool || pool.length === 0) return null;
   const key = `${type}:${moment}`;
   let idx = Math.floor(Math.random() * pool.length);
@@ -691,7 +691,7 @@ function spawnEnemy(boss = false, forcedType = null) {
     wanderTimer: 0,
   });
   const spawned = state.enemies[state.enemies.length - 1];
-  trySpawnSpeechBubble(spawned, pickLine(type, 'spawn'), { boss, duration: boss ? 2.5 : 1.8 });
+  trySpawnSpeechBubble(spawned, pickLine(type, 'aggro'), { boss, duration: boss ? 2.5 : 1.8 });
 }
 
 // Swarmers arrive in a cluster of 3-4 from the same edge point, not as
