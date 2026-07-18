@@ -624,6 +624,10 @@ const DIALOGUE = {
     aggro: ['I got this!', 'Charge!', "You're finished!", 'Get him!', 'For the swarm!'],
     death: ['Oof.', 'That hurt...', 'Not fair!', 'Ugh, really?', "Guess I'm done."],
   },
+  brute: {
+    aggro: ['Take this.', 'Nowhere to hide.', 'Feel my power.', "You're outgunned.", 'This ends fast.'],
+    death: ['Not... possible...', 'I had more in me!', 'This weapon... failed me.', 'Ugh! Lucky shot!', "You'll need more than that."],
+  },
 };
 
 const PLAYER_LINES = {

@@ -44,6 +44,7 @@ const OUTPUT_FORMAT = 'mp3_44100_128';
 //   boss    -> Adam    (pNInz6obpgDQGcFmaJgB) - "Dominant, Firm", pitched way down -> deep monster/"granny villain" growl
 //   player  -> Charlie (IKne3meq5aSn9XLyUdCD) - "Confident, Energetic", pitched slightly up -> bright cartoon hero
 //   grunt   -> Harry   (SOYHLrjzK2X1ezoPC6cr) - "Fierce Warrior", pitched slightly up + wavery -> all bark, dies in one hit
+//   brute   -> Brian   (nPczCjzI2devNBz1zQrb) - "Deep, Resonant", pitched down + steady -> heavy, deliberate weapons threat
 const VOICES = {
   chaser: { id: 'N2lVS1w4EtoT3dr4eOWO', pitchFactor: 0.88, settings: { stability: 0.3, similarity_boost: 0.8, style: 0.7, speed: 1.05 } },
   swarmer: { id: 'FGY2WhTYpPnrIDTdsKH5', pitchFactor: 1.4, settings: { stability: 0.25, similarity_boost: 0.75, style: 0.8, speed: 1.15 } },
@@ -52,6 +53,7 @@ const VOICES = {
   boss: { id: 'pNInz6obpgDQGcFmaJgB', pitchFactor: 0.72, settings: { stability: 0.6, similarity_boost: 0.85, style: 0.6, speed: 0.85 } },
   player: { id: 'IKne3meq5aSn9XLyUdCD', pitchFactor: 1.1, settings: { stability: 0.45, similarity_boost: 0.8, style: 0.55, speed: 1.05 } },
   grunt: { id: 'SOYHLrjzK2X1ezoPC6cr', pitchFactor: 1.08, settings: { stability: 0.2, similarity_boost: 0.7, style: 0.65, speed: 1.1 } },
+  brute: { id: 'nPczCjzI2devNBz1zQrb', pitchFactor: 0.78, settings: { stability: 0.55, similarity_boost: 0.85, style: 0.5, speed: 0.85 } },
 };
 
 // The classic "tape speed" pitch-shift: resampling at a different rate
