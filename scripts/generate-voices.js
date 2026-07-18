@@ -3,9 +3,12 @@
 // One-time voice generation script - NOT part of the live server.
 //
 // Reads DIALOGUE and PLAYER_LINES straight out of public/game.js (so this
-// can never drift out of sync with the actual in-game text) and calls the
-// ElevenLabs text-to-speech API once per line, saving each result as an mp3
-// in public/audio/. Run manually:
+// can never drift out of sync with the actual in-game text), calls the
+// ElevenLabs text-to-speech API once per line, then pitch-shifts the result
+// via ffmpeg (classic "tape speed" asetrate trick - the same technique behind
+// chipmunk/deep-monster voices) so every line lands as an obviously toony,
+// non-realistic character voice instead of a naturalistic human recording.
+// Run manually:
 //
 //   node scripts/generate-voices.js
 //
@@ -16,33 +19,54 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const API_KEY = process.env.ELEVENLABS_API_KEY;
 const GAME_JS_PATH = path.join(__dirname, '..', 'public', 'game.js');
 const OUT_DIR = path.join(__dirname, '..', 'public', 'audio');
+const TMP_RAW = path.join(OUT_DIR, '.tmp-raw.mp3');
 const FORCE = process.argv.includes('--force');
 
 const DELAY_MS = 400; // courtesy delay between API calls
 const MODEL_ID = 'eleven_multilingual_v2';
 const OUTPUT_FORMAT = 'mp3_44100_128';
 
-// One ElevenLabs premade voice per character, picked from the account's
-// available voice library (fetched via GET /v2/voices) to match each
-// personality described in the task:
-//   chaser  -> Callum  (N2lVS1w4EtoT3dr4eOWO) - "Husky Trickster", gruff/aggressive
-//   swarmer -> Laura   (FGY2WhTYpPnrIDTdsKH5) - "Enthusiast, Quirky Attitude", higher/quick
-//   sniper  -> River   (SAz9YHcvj6GT2YYXdXww) - "Relaxed, Neutral, Informative", cold/controlled
-//   dasher  -> Liam    (TX3LPaxmHKxFdv7VOQHJ) - "Energetic, Social Media Creator", fast-talking
-//   boss    -> Adam    (pNInz6obpgDQGcFmaJgB) - "Dominant, Firm", deep/menacing
-//   player  -> Charlie (IKne3meq5aSn9XLyUdCD) - "Deep, Confident, Energetic", distinct from all enemies
+// One ElevenLabs premade voice per character (the account's free-tier default
+// voices - the more characterful "shared library" voices like a witch/goblin/
+// monster require a paid ElevenLabs plan for API access, so instead each of
+// these gets pitch-shifted via ffmpeg below to land squarely in toony,
+// non-realistic territory - the same "tape speed" trick behind classic
+// chipmunk/deep-monster cartoon voices):
+//   chaser  -> Callum  (N2lVS1w4EtoT3dr4eOWO) - "Husky Trickster", pitched down -> gruff goblin-ish
+//   swarmer -> Laura   (FGY2WhTYpPnrIDTdsKH5) - "Enthusiast, Quirky", pitched way up -> squeaky critter
+//   sniper  -> River   (SAz9YHcvj6GT2YYXdXww) - "Relaxed, Neutral", pitched down -> cold, hollow
+//   dasher  -> Liam    (TX3LPaxmHKxFdv7VOQHJ) - "Energetic", pitched up -> frantic, chipmunk-ish
+//   boss    -> Adam    (pNInz6obpgDQGcFmaJgB) - "Dominant, Firm", pitched way down -> deep monster/"granny villain" growl
+//   player  -> Charlie (IKne3meq5aSn9XLyUdCD) - "Confident, Energetic", pitched slightly up -> bright cartoon hero
 const VOICES = {
-  chaser: { id: 'N2lVS1w4EtoT3dr4eOWO', settings: { stability: 0.35, similarity_boost: 0.8, style: 0.6, speed: 1.05 } },
-  swarmer: { id: 'FGY2WhTYpPnrIDTdsKH5', settings: { stability: 0.3, similarity_boost: 0.75, style: 0.7, speed: 1.15 } },
-  sniper: { id: 'SAz9YHcvj6GT2YYXdXww', settings: { stability: 0.75, similarity_boost: 0.8, style: 0.15, speed: 0.9 } },
-  dasher: { id: 'TX3LPaxmHKxFdv7VOQHJ', settings: { stability: 0.3, similarity_boost: 0.75, style: 0.75, speed: 1.2 } },
-  boss: { id: 'pNInz6obpgDQGcFmaJgB', settings: { stability: 0.65, similarity_boost: 0.85, style: 0.5, speed: 0.85 } },
-  player: { id: 'IKne3meq5aSn9XLyUdCD', settings: { stability: 0.5, similarity_boost: 0.8, style: 0.45, speed: 1.05 } },
+  chaser: { id: 'N2lVS1w4EtoT3dr4eOWO', pitchFactor: 0.88, settings: { stability: 0.3, similarity_boost: 0.8, style: 0.7, speed: 1.05 } },
+  swarmer: { id: 'FGY2WhTYpPnrIDTdsKH5', pitchFactor: 1.4, settings: { stability: 0.25, similarity_boost: 0.75, style: 0.8, speed: 1.15 } },
+  sniper: { id: 'SAz9YHcvj6GT2YYXdXww', pitchFactor: 0.82, settings: { stability: 0.7, similarity_boost: 0.8, style: 0.2, speed: 0.9 } },
+  dasher: { id: 'TX3LPaxmHKxFdv7VOQHJ', pitchFactor: 1.22, settings: { stability: 0.25, similarity_boost: 0.75, style: 0.85, speed: 1.2 } },
+  boss: { id: 'pNInz6obpgDQGcFmaJgB', pitchFactor: 0.72, settings: { stability: 0.6, similarity_boost: 0.85, style: 0.6, speed: 0.85 } },
+  player: { id: 'IKne3meq5aSn9XLyUdCD', pitchFactor: 1.1, settings: { stability: 0.45, similarity_boost: 0.8, style: 0.55, speed: 1.05 } },
 };
+
+// The classic "tape speed" pitch-shift: resampling at a different rate
+// changes both pitch and tempo together (raising pitch also speeds it up,
+// lowering it also slows it down) - exactly how chipmunk and deep-monster
+// cartoon voices are traditionally made, which reads as far more "toony"
+// than a formant-corrected pitch-only shift would.
+function pitchShift(inputPath, outputPath, factor) {
+  const nativeRate = 44100;
+  const shiftedRate = Math.round(nativeRate * factor);
+  execFileSync('ffmpeg', [
+    '-y', '-i', inputPath,
+    '-filter:a', `asetrate=${shiftedRate},aresample=${nativeRate}`,
+    '-b:a', '128k',
+    outputPath,
+  ], { stdio: 'pipe' });
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -129,7 +153,8 @@ async function generateOne(job) {
   }
 
   const buffer = Buffer.from(await res.arrayBuffer());
-  fs.writeFileSync(path.join(OUT_DIR, job.file), buffer);
+  fs.writeFileSync(TMP_RAW, buffer);
+  pitchShift(TMP_RAW, path.join(OUT_DIR, job.file), job.voice.pitchFactor);
 }
 
 async function main() {
@@ -174,6 +199,8 @@ async function main() {
 
     await sleep(DELAY_MS);
   }
+
+  fs.rmSync(TMP_RAW, { force: true });
 
   console.log('\n--- Summary ---');
   console.log(`Generated: ${generated}`);
