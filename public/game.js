@@ -620,6 +620,10 @@ const DIALOGUE = {
     aggro: ['You dare challenge me?!', 'Prepare to be destroyed!', "I'll end you myself!", 'This is my domain!', 'You have no chance!'],
     death: ['Impossible! I am unstoppable!', "This isn't over, hero!", "You'll face my wrath again!", 'Curse you!', "I'll return stronger!"],
   },
+  grunt: {
+    aggro: ['I got this!', 'Charge!', "You're finished!", 'Get him!', 'For the swarm!'],
+    death: ['Oof.', 'That hurt...', 'Not fair!', 'Ugh, really?', "Guess I'm done."],
+  },
 };
 
 const PLAYER_LINES = {
