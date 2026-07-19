@@ -25,6 +25,21 @@ const PALETTES = {
   // Brute - tanky ranged attacker, dark blood-red and rendered larger than
   // regular enemies so it reads as the most dangerous non-boss threat.
   brute: { '#': '#2a0505', A: '#8a0e0e', B: '#500808', C: '#ff4d4d' },
+
+  // Elemental elites - all ten share one of two silhouettes (ELITE_LIGHT or
+  // ELITE_HEAVY, see below) and are distinguished from each other purely by
+  // palette, matching this file's existing convention (grunt/loot/brute all
+  // reuse the base ENEMY shape too).
+  archer: { '#': '#241a0a', A: '#c8a25a', B: '#8a6a35', C: '#f0dca0' },
+  frost: { '#': '#032733', A: '#8fe0ff', B: '#3d9fc2', C: '#e0faff' },
+  toxic: { '#': '#0f2408', A: '#7cff3d', B: '#4a9e22', C: '#d4ffb0' },
+  stormcaller: { '#': '#050e33', A: '#4dd8ff', B: '#2c7ea3', C: '#dff7ff' },
+  acid: { '#': '#1c2400', A: '#b6ff3d', B: '#7a9e22', C: '#eaffb0' },
+  pyro: { '#': '#3a1200', A: '#ff6a1a', B: '#b3410f', C: '#ffd9a0' },
+  bomber: { '#': '#331a00', A: '#ffb020', B: '#a3690f', C: '#ffe0a0' },
+  frostguard: { '#': '#021a24', A: '#5fc4ff', B: '#1f6f96', C: '#c8f0ff' },
+  plague: { '#': '#0a1f05', A: '#4fdb3d', B: '#2c8a1e', C: '#a0ff8a' },
+  inferno: { '#': '#4a0800', A: '#ff3d1a', B: '#8a1400', C: '#ffb066' },
 };
 
 // Player, frame 1 (legs together) - 10x10
@@ -113,6 +128,32 @@ const SWARMER = [
   '.####.',
 ];
 
+// Elite light - compact spiky orb silhouette for the six faster/glassier
+// elemental ranged attackers (archer, frost, toxic, stormcaller, acid, pyro).
+// Distinct from the squarer base ENEMY shape so they read as a new threat
+// category before the player even clocks their color.
+const ELITE_LIGHT = [
+  '.#.##.#.',
+  '##ABBA##',
+  '#ABCCBA#',
+  '#ABCCBA#',
+  '##ABBA##',
+  '.#.##.#.',
+];
+
+// Elite heavy - bulkier armored silhouette for the four tanky elemental
+// grenadiers (bomber, frostguard, plague, inferno).
+const ELITE_HEAVY = [
+  '.######.',
+  '#AAAAAA#',
+  '#ABBBBA#',
+  '#ABCCBA#',
+  '#ABCCBA#',
+  '#ABBBBA#',
+  '#AAAAAA#',
+  '##....##',
+];
+
 const BOSS = [
   '...####...',
   '..#AAAAAA#',
@@ -159,6 +200,16 @@ const SPRITES = {
   loot: renderSpriteToCanvas(ENEMY, PALETTES.loot),
   grunt: renderSpriteToCanvas(ENEMY, PALETTES.grunt),
   brute: renderSpriteToCanvas(ENEMY, PALETTES.brute),
+  archer: renderSpriteToCanvas(ELITE_LIGHT, PALETTES.archer),
+  frost: renderSpriteToCanvas(ELITE_LIGHT, PALETTES.frost),
+  toxic: renderSpriteToCanvas(ELITE_LIGHT, PALETTES.toxic),
+  stormcaller: renderSpriteToCanvas(ELITE_LIGHT, PALETTES.stormcaller),
+  acid: renderSpriteToCanvas(ELITE_LIGHT, PALETTES.acid),
+  pyro: renderSpriteToCanvas(ELITE_LIGHT, PALETTES.pyro),
+  bomber: renderSpriteToCanvas(ELITE_HEAVY, PALETTES.bomber),
+  frostguard: renderSpriteToCanvas(ELITE_HEAVY, PALETTES.frostguard),
+  plague: renderSpriteToCanvas(ELITE_HEAVY, PALETTES.plague),
+  inferno: renderSpriteToCanvas(ELITE_HEAVY, PALETTES.inferno),
 };
 
 // Draw a sprite centered at (x, y), optionally flipped horizontally,
