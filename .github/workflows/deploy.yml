@@ -10,18 +10,15 @@ jobs:
     steps:
       - name: Deploy to VPS
         uses: appleboy/ssh-action@v1.0.3
-        env:
-          SUDO_PASS: ${{ secrets.VPS_PASSWORD }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASSWORD }}
-          envs: SUDO_PASS
           script_stop: true
           script: |
             cd /home/mestarkris/fire-of-the-blaze
             git pull origin main
             npm install --omit=dev
-            echo "$SUDO_PASS" | sudo -S systemctl restart fireoftheblaze.service
+            ~/.npm-global/bin/pm2 restart fire-of-the-blaze
             sleep 2
-            sudo -S systemctl is-active fireoftheblaze.service <<< "$SUDO_PASS"
+            ~/.npm-global/bin/pm2 list
