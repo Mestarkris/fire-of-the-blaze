@@ -70,13 +70,14 @@ window.addEventListener('resize', resizeCanvas);
 // ---------------------------------------------------------------------------
 
 const state = {
-  player: { x: 0, y: 0, r: 16, hp: 100, maxHp: 100, speed: 260, shielded: false, shieldUntil: 0, facingLeft: false, kx: 0, ky: 0, vx: 0, vy: 0, gunAngle: 0 },
+  player: { x: 0, y: 0, r: 16, hp: 100, maxHp: 100, speed: 260, shielded: false, shieldUntil: 0, facingLeft: false, kx: 0, ky: 0, vx: 0, vy: 0, gunAngle: 0, dotUntil: 0, dotDps: 0, chillUntil: 0, chillMul: 1 },
   bullets: [],
   enemyProjectiles: [],
   enemies: [],
   allies: [],
   particles: [],
   obstacles: [],
+  hazards: [],
   score: 0,
   keys: {},
   mouse: { x: 0, y: 0, down: false },
@@ -127,10 +128,10 @@ const HEALTH_ICON = [
 ];
 
 // ---------------------------------------------------------------------------
-// Weapons - the default gun plus seven timed pickups. Every pickup clearly
+// Weapons - the default gun plus ten timed pickups. Every pickup clearly
 // out-DPSes or out-powers the default gun in some dimension (raw damage,
-// fire rate, piercing, or area) so grabbing one actually feels like a
-// power spike, not a sidegrade.
+// fire rate, piercing, area, or a status effect) so grabbing one actually
+// feels like a power spike, not a sidegrade.
 // ---------------------------------------------------------------------------
 
 const WEAPON_DEFS = {
@@ -142,14 +143,28 @@ const WEAPON_DEFS = {
   shotgun: { color: '#ff5a1a', fireRate: 380, damage: 1.3, mode: 'shotgun' },
   rocket: { color: '#ff1f3d', fireRate: 900, damage: 4, mode: 'rocket' },
   flamethrower: { color: '#ffcf3d', fireRate: 0, damage: 0.8, mode: 'flame' },
+  // Ice bolt - modest direct damage, but chills the enemy on hit (see
+  // b.freeze handling below), sapping its speed for a couple seconds so
+  // its power is crowd control rather than raw DPS.
+  ice: { color: '#8fe0ff', fireRate: 260, damage: 1.1, mode: 'ice' },
+  // Poison dart - weak on impact but tags the enemy with a damage-over-time
+  // tick (b.poison), so its power is "keeps dealing damage after you move on".
+  poison: { color: '#7cff3d', fireRate: 300, damage: 0.6, mode: 'poison' },
+  // Laser - a near-instant hitscan-style bolt (very high speed, short life)
+  // that pierces every enemy in its path, trading fire rate for a huge
+  // single-press hit against a lined-up crowd.
+  laser: { color: '#ff4dff', fireRate: 480, damage: 3, mode: 'laser' },
 };
-const PICKUP_WEAPON_TYPES = ['spread', 'rapid', 'electric', 'ricochet', 'shotgun', 'rocket', 'flamethrower'];
+const PICKUP_WEAPON_TYPES = ['spread', 'rapid', 'electric', 'ricochet', 'shotgun', 'rocket', 'flamethrower', 'ice', 'poison', 'laser'];
 const WEAPON_DURATION_MS = 15000;
 
 const WAVE_DURATION = 30;
 
 function currentSpawnInterval() {
-  const base = Math.max(0.7, 2.2 - (state.wave - 1) * 0.12);
+  let base = Math.max(0.7, 2.2 - (state.wave - 1) * 0.12);
+  // From wave 10, enemies also arrive noticeably faster on top of the
+  // existing per-wave creep - part of the harder late-game curve.
+  if (state.wave >= 10) base = Math.max(0.45, base - 0.35 - (state.wave - 10) * 0.01);
   // Danger waves trade crowd size for individual toughness - fewer enemies
   // incoming overall, so it reads as "one bad enemy" rather than a mob.
   return isDangerWave(state.wave) ? base + 0.6 : base;
@@ -231,12 +246,13 @@ function resetState() {
   state.paused = false;
   pauseScreen.classList.add('hidden');
   document.getElementById('pause-btn').innerHTML = '&#9208;';
-  state.player = { x: canvas.width / 2, y: canvas.height / 2, r: 16, hp: 100, maxHp: 100, speed: 260, shielded: false, shieldUntil: 0, facingLeft: false, kx: 0, ky: 0, vx: 0, vy: 0, gunAngle: 0 };
+  state.player = { x: canvas.width / 2, y: canvas.height / 2, r: 16, hp: 100, maxHp: 100, speed: 260, shielded: false, shieldUntil: 0, facingLeft: false, kx: 0, ky: 0, vx: 0, vy: 0, gunAngle: 0, dotUntil: 0, dotDps: 0, chillUntil: 0, chillMul: 1 };
   state.bullets = [];
   state.enemyProjectiles = [];
   state.enemies = [];
   state.allies = [];
   state.particles = [];
+  state.hazards = [];
   state.score = 0;
   state.spawnTimer = 0;
   state.slowUntil = 0;
@@ -561,18 +577,39 @@ function escapeHtml(str) {
 function pickEnemyType() {
   const pool = ['chaser', 'grunt'];
   if (state.wave >= 3) pool.push('swarmer');
+  if (state.wave >= 4) pool.push('archer');
   if (state.wave >= 5) pool.push('sniper');
-  if (state.wave >= 6) pool.push('brute');
-  if (state.wave >= 8) pool.push('dasher');
+  if (state.wave >= 6) pool.push('brute', 'frost');
+  if (state.wave >= 7) pool.push('toxic');
+  if (state.wave >= 8) pool.push('dasher', 'stormcaller');
+  if (state.wave >= 9) pool.push('acid');
+  // From here on, the elemental "elites" keep joining the pool every wave -
+  // this is what makes the game noticeably harder starting around wave 10,
+  // on top of the raw hp/speed ramp in hardModeMultiplier().
+  if (state.wave >= 10) pool.push('pyro');
+  if (state.wave >= 11) pool.push('bomber');
+  if (state.wave >= 12) pool.push('frostguard');
+  if (state.wave >= 13) pool.push('plague');
+  if (state.wave >= 14) pool.push('inferno');
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
 // Every 3rd wave (skipping boss waves, which are already a spike) is a
 // "danger wave" - fewer enemies come in (see currentSpawnInterval) but the
 // ones that do are tougher, so the threat feels concentrated rather than
-// just a bigger crowd.
+// just a bigger crowd. From wave 10 onward danger waves come around twice as
+// often (every other wave) as part of the harder late-game curve.
 function isDangerWave(wave) {
-  return wave % 3 === 0 && wave % 5 !== 0;
+  if (wave % 5 === 0) return false;
+  return wave >= 10 ? wave % 2 === 0 : wave % 3 === 0;
+}
+
+// From wave 10 the whole enemy roster (not just the elemental elites joining
+// the pool) gets tankier and faster on top of the normal per-wave creep, so
+// the game keeps escalating deep into a run instead of plateauing once every
+// enemy type has unlocked.
+function hardModeMultiplier(wave) {
+  return wave >= 10 ? 1 + (wave - 9) * 0.09 : 1;
 }
 
 const ENEMY_ARCHETYPES = {
@@ -588,9 +625,50 @@ const ENEMY_ARCHETYPES = {
   // worth little score; gives the player easy, satisfying kills to mix in
   // with tougher enemies rather than every enemy being a real threat.
   grunt: { r: 12, hp: 1, speedRange: [70, 100], color: '#8a8f9a', score: 6 },
-  // Brute - the most dangerous regular (non-boss) enemy: tanky, slow, and
-  // armed with the hardest-hitting ranged attack in the game.
+  // Brute - tanky, slow, and armed with the hardest-hitting ranged attack of
+  // the original roster.
   brute: { r: 20, hp: 5, speedRange: [40, 55], color: '#8a0e0e', score: 35 },
+
+  // ---- Elemental elites (see ELITE_ATTACK below for their weapons) --------
+  // Six "light" elites: fast to kill individually but hit hard and fast.
+  archer: { r: 13, hp: 3, speedRange: [85, 105], color: '#c8a25a', score: 22 },
+  frost: { r: 14, hp: 4, speedRange: [70, 90], color: '#8fe0ff', score: 25 },
+  toxic: { r: 14, hp: 4, speedRange: [65, 85], color: '#7cff3d', score: 25 },
+  stormcaller: { r: 14, hp: 5, speedRange: [70, 90], color: '#4dd8ff', score: 28 },
+  acid: { r: 14, hp: 4, speedRange: [70, 90], color: '#b6ff3d', score: 25 },
+  pyro: { r: 15, hp: 5, speedRange: [70, 90], color: '#ff6a1a', score: 27 },
+  // Four "heavy" elites: genuinely hard to kill (high hp, slow), lobbing
+  // splash-damage grenades instead of single-target bolts.
+  bomber: { r: 20, hp: 7, speedRange: [45, 55], color: '#ffb020', score: 36 },
+  frostguard: { r: 22, hp: 9, speedRange: [35, 45], color: '#5fc4ff', score: 42 },
+  plague: { r: 21, hp: 8, speedRange: [40, 50], color: '#4fdb3d', score: 40 },
+  inferno: { r: 22, hp: 9, speedRange: [35, 45], color: '#ff3d1a', score: 46 },
+};
+
+// The set of enemy types rendered with the bulkier ELITE_HEAVY sprite and a
+// larger on-screen size (see the `size` lookup in render()).
+const HEAVY_ELITE_TYPES = new Set(['bomber', 'frostguard', 'plague', 'inferno']);
+
+// Attack config for every elemental elite - one shared kiting-AI branch in
+// the enemy update loop reads this table instead of hand-writing 10 nearly
+// identical movement/attack blocks. `kind: 'bolt'` fires a straight shot that
+// resolves on direct hit; `kind: 'grenade'` lobs a slower shot that detonates
+// in a `splash` radius around the player when its short life runs out (it
+// doesn't need to land a direct hit). `status: 'dot'` burns/poisons the
+// player for `statusDps` over `statusDur` ms; `status: 'chill'` saps the
+// player's top speed to `slowMul` for `statusDur` ms. `hazard: true` leaves
+// a damaging ground zone at the impact point (see state.hazards).
+const ELITE_ATTACK = {
+  archer: { tanky: false, projSpeed: 480, projR: 4, cooldown: [0.9, 1.2], damage: 12, kind: 'bolt', color: '#c8a25a' },
+  frost: { tanky: false, projSpeed: 260, projR: 6, cooldown: [1.8, 2.2], damage: 10, kind: 'bolt', color: '#8fe0ff', status: 'chill', statusDur: 2200, slowMul: 0.45 },
+  toxic: { tanky: false, projSpeed: 220, projR: 7, cooldown: [2.2, 2.6], damage: 8, kind: 'bolt', color: '#7cff3d', status: 'dot', statusDur: 4000, statusDps: 3, hazard: true, hazardR: 55, hazardDur: 4000, life: 1.6 },
+  stormcaller: { tanky: false, projSpeed: 300, projR: 6, cooldown: [2.0, 2.4], damage: 15, kind: 'bolt', color: '#4dd8ff', homing: 0.08 },
+  acid: { tanky: false, projSpeed: 210, projR: 7, cooldown: [2.2, 2.6], damage: 10, kind: 'bolt', color: '#b6ff3d', hazard: true, hazardR: 65, hazardDur: 5000, life: 1.6 },
+  pyro: { tanky: false, projSpeed: 230, projR: 7, cooldown: [2.0, 2.4], damage: 13, kind: 'bolt', color: '#ff6a1a', status: 'dot', statusDur: 3000, statusDps: 4 },
+  bomber: { tanky: true, projSpeed: 130, projR: 8, cooldown: [2.6, 3.0], damage: 18, kind: 'grenade', color: '#ffb020', splash: 100 },
+  frostguard: { tanky: true, projSpeed: 160, projR: 9, cooldown: [2.8, 3.2], damage: 16, kind: 'grenade', color: '#5fc4ff', splash: 90, status: 'chill', statusDur: 3200, slowMul: 0.35 },
+  plague: { tanky: true, projSpeed: 150, projR: 9, cooldown: [3.0, 3.4], damage: 12, kind: 'grenade', color: '#4fdb3d', splash: 100, status: 'dot', statusDur: 5000, statusDps: 4, hazard: true, hazardR: 90, hazardDur: 6000 },
+  inferno: { tanky: true, projSpeed: 150, projR: 9, cooldown: [2.6, 3.0], damage: 20, kind: 'grenade', color: '#ff3d1a', splash: 100, status: 'dot', statusDur: 4000, statusDps: 5 },
 };
 
 // ---------------------------------------------------------------------------
@@ -627,6 +705,46 @@ const DIALOGUE = {
   brute: {
     aggro: ['Take this.', 'Nowhere to hide.', 'Feel my power.', "You're outgunned.", 'This ends fast.'],
     death: ['Not... possible...', 'I had more in me!', 'This weapon... failed me.', 'Ugh! Lucky shot!', "You'll need more than that."],
+  },
+  archer: {
+    aggro: ["Nowhere to hide from my arrows!", 'Steady aim, steady kill.', "Let it fly!"],
+    death: ['Bad... shot...', "My quiver's empty anyway.", 'Missed my mark...'],
+  },
+  frost: {
+    aggro: ['Feel the freeze!', 'Cold enough for you?', "You'll slow down soon."],
+    death: ["I'm... melting...", 'So cold...', 'Frozen out.'],
+  },
+  toxic: {
+    aggro: ['Breathe this in.', 'Poison for everyone!', "You're already infected."],
+    death: ['Toxic to the end...', 'Ugh... poisoned myself...', 'The spores... win...'],
+  },
+  stormcaller: {
+    aggro: ['Feel the storm!', 'Lightning strikes twice.', 'Static in the air...'],
+    death: ['Short circuit...', 'The storm fades...', "Shocking, isn't it..."],
+  },
+  acid: {
+    aggro: ["This'll burn.", 'Dissolve where you stand.', 'Corrosion incoming!'],
+    death: ['Eating through me too...', 'Acidic end...', 'Burned out...'],
+  },
+  pyro: {
+    aggro: ['Burn, baby, burn!', 'Feel the heat!', "Light 'em up!"],
+    death: ['Snuffed out...', 'My flame... dies...', 'Ashes to ashes...'],
+  },
+  bomber: {
+    aggro: ['Fire in the hole!', 'Catch this!', 'Boom incoming!'],
+    death: ['Duds happen...', 'Should\'ve ducked myself...', 'That backfired...'],
+  },
+  frostguard: {
+    aggro: ['None shall pass.', 'The cold holds the line.', 'Stand and freeze.'],
+    death: ['The wall... cracks...', 'Too cold to move...', 'Guard down...'],
+  },
+  plague: {
+    aggro: ['Spread the sickness.', 'None escape the plague.', 'Rot take you.'],
+    death: ['The plague... consumes me...', 'Sickly end...', 'Rotten luck...'],
+  },
+  inferno: {
+    aggro: ['I am the inferno!', 'Everything burns before me.', 'Witness true fire!'],
+    death: ['The inferno... dims...', 'Extinguished...', 'My fire... fades...'],
   },
 };
 
@@ -767,8 +885,11 @@ function spawnEnemy(boss = false, forcedType = null) {
   // Danger waves buff regular wave enemies (not bosses, and not tip-reward
   // loot enemies) so the fewer spawns that do come in hit noticeably harder.
   const dangerBuffed = !boss && type !== 'loot' && isDangerWave(state.wave);
-  const hpMul = dangerBuffed ? 1.6 : 1;
-  const speedBuffMul = dangerBuffed ? 1.15 : 1;
+  // The wave-10+ hard-mode ramp applies to everything except loot (loot is a
+  // tip reward and should stay a guaranteed one-hit kill).
+  const hardMul = type === 'loot' ? 1 : hardModeMultiplier(state.wave);
+  const hpMul = (dangerBuffed ? 1.6 : 1) * hardMul;
+  const speedBuffMul = (dangerBuffed ? 1.15 : 1) * Math.min(1.3, hardMul);
   const speed = (def.speedRange[0] + Math.random() * (def.speedRange[1] - def.speedRange[0])) * waveSpeedMul * speedBuffMul;
 
   state.enemies.push({
@@ -1121,6 +1242,16 @@ function update(dt, now) {
   p.shielded = now < p.shieldUntil;
   updateShieldHud();
 
+  // Elemental status effects from elite enemy attacks/hazard zones - dot
+  // ticks damage over time (fire/poison), chill saps top speed (ice).
+  if (p.dotUntil && now < p.dotUntil) {
+    p.hp -= (p.dotDps || 0) * dt;
+    updateHud();
+    if (Math.random() < 0.15) spawnParticles(p.x, p.y, '#7cff3d');
+    if (p.hp <= 0) return gameOver();
+  }
+  const chillMul = now < (p.chillUntil || 0) ? (p.chillMul || 1) : 1;
+
   // Movement - momentum-based: accelerate toward input direction, cap at
   // top speed, and slide to a stop via friction when there's no input.
   // Joystick gives continuous analog direction+magnitude when active; keyboard
@@ -1155,9 +1286,10 @@ function update(dt, now) {
     if (Math.abs(p.vy) < 1) p.vy = 0;
   }
   const vlen = Math.hypot(p.vx, p.vy);
-  if (vlen > p.speed) {
-    p.vx = (p.vx / vlen) * p.speed;
-    p.vy = (p.vy / vlen) * p.speed;
+  const cappedSpeed = p.speed * chillMul;
+  if (vlen > cappedSpeed) {
+    p.vx = (p.vx / vlen) * cappedSpeed;
+    p.vy = (p.vy / vlen) * cappedSpeed;
   }
 
   p.x += p.vx * dt;
@@ -1232,6 +1364,24 @@ function update(dt, now) {
           x: p.x, y: p.y, vx: Math.cos(angle) * 620, vy: Math.sin(angle) * 620,
           r: 4, life: 2.5, damage: weaponDef.damage, color: weaponDef.color,
           bounces: 2, hitSet: new Set(),
+        });
+      } else if (weaponDef.mode === 'ice') {
+        state.bullets.push({
+          x: p.x, y: p.y, vx: Math.cos(angle) * 560, vy: Math.sin(angle) * 560,
+          r: 4, life: 1.3, damage: weaponDef.damage, color: weaponDef.color,
+          freeze: true,
+        });
+      } else if (weaponDef.mode === 'poison') {
+        state.bullets.push({
+          x: p.x, y: p.y, vx: Math.cos(angle) * 520, vy: Math.sin(angle) * 520,
+          r: 4, life: 1.4, damage: weaponDef.damage, color: weaponDef.color,
+          poison: true,
+        });
+      } else if (weaponDef.mode === 'laser') {
+        state.bullets.push({
+          x: p.x, y: p.y, vx: Math.cos(angle) * 2600, vy: Math.sin(angle) * 2600,
+          r: 5, life: 0.4, damage: weaponDef.damage, color: weaponDef.color,
+          hitSet: new Set(),
         });
       } else {
         state.bullets.push({
@@ -1332,7 +1482,15 @@ function update(dt, now) {
   // obstacle collision, and contact damage stay shared across all of them.
   state.enemies.forEach((e) => {
     const idealAngle = Math.atan2(p.y - e.y, p.x - e.x);
-    const speedMul = slowed ? 0.35 : 1;
+    // Frozen (ice weapon) stacks on top of the chat !slow effect rather than
+    // replacing it, so both sources of slow feel consistent with each other.
+    const frozen = now < (e.frozenUntil || 0);
+    const speedMul = (slowed ? 0.35 : 1) * (frozen ? 0.4 : 1);
+
+    if (e.poisonUntil && now < e.poisonUntil && e.hp > 0) {
+      e.hp -= (e.poisonDps || 1) * dt;
+      if (Math.random() < 0.2) spawnParticles(e.x, e.y, '#7cff3d');
+    }
 
     if (e.type === 'sniper') {
       const d = dist(e, p);
@@ -1405,6 +1563,35 @@ function update(dt, now) {
           e.dashTimer = 2 + Math.random() * 2;
         }
       }
+    } else if (ELITE_ATTACK[e.type]) {
+      // Elemental elites - shared kiting AI (identical shape to sniper/brute
+      // above) driven entirely by the ELITE_ATTACK config for this type, so
+      // all 10 elemental enemies reuse one movement/attack block instead of
+      // each needing its own hand-written branch.
+      const cfg = ELITE_ATTACK[e.type];
+      const d = dist(e, p);
+      let targetAngle;
+      if (d < 220) targetAngle = idealAngle + Math.PI;
+      else if (d > 320) targetAngle = idealAngle;
+      else targetAngle = idealAngle + (Math.PI / 2) * e.strafeDir;
+      if (e.heading === undefined) e.heading = targetAngle;
+      e.heading = lerpAngle(e.heading, targetAngle, dt * (cfg.tanky ? 1.6 : 3));
+      e.x += Math.cos(e.heading) * e.speed * speedMul * dt;
+      e.y += Math.sin(e.heading) * e.speed * speedMul * dt;
+
+      e.fireCooldown -= dt;
+      if (e.fireCooldown <= 0 && d < 600) {
+        e.fireCooldown = cfg.cooldown[0] + Math.random() * (cfg.cooldown[1] - cfg.cooldown[0]);
+        state.enemyProjectiles.push({
+          x: e.x, y: e.y,
+          vx: Math.cos(idealAngle) * cfg.projSpeed, vy: Math.sin(idealAngle) * cfg.projSpeed,
+          r: cfg.projR, life: cfg.kind === 'grenade' ? 1.2 + Math.random() * 0.3 : (cfg.life || 5),
+          damage: cfg.damage, color: cfg.color, kind: cfg.kind,
+          status: cfg.status, statusDur: cfg.statusDur, statusDps: cfg.statusDps, slowMul: cfg.slowMul,
+          hazard: cfg.hazard, hazardR: cfg.hazardR, hazardDur: cfg.hazardDur,
+          splash: cfg.splash, homing: cfg.homing,
+        });
+      }
     } else {
       // chaser, swarmer, boss - direct homing chase.
       if (e.heading === undefined) e.heading = idealAngle;
@@ -1433,27 +1620,75 @@ function update(dt, now) {
     }
   });
 
-  // Enemy projectiles (sniper shots)
+  // Enemy projectiles (sniper/brute shots plus the elemental elites' bolts
+  // and grenades). Bolts resolve on a direct hit; grenades (pr.kind ===
+  // 'grenade') instead detonate when their short life runs out and splash
+  // anyone within pr.splash of wherever they land, hit or not.
   state.enemyProjectiles.forEach((pr) => {
+    if (pr.homing) {
+      const desired = Math.atan2(p.y - pr.y, p.x - pr.x);
+      const cur = Math.atan2(pr.vy, pr.vx);
+      const bent = lerpAngle(cur, desired, pr.homing);
+      const spd = Math.hypot(pr.vx, pr.vy);
+      pr.vx = Math.cos(bent) * spd;
+      pr.vy = Math.sin(bent) * spd;
+    }
     pr.x += pr.vx * dt;
     pr.y += pr.vy * dt;
     pr.life -= dt;
     if (insideObstacle(pr.x, pr.y)) pr.life = 0;
-    if (pr.life > 0 && dist(pr, p) < pr.r + p.r) {
-      pr.life = 0;
-      if (!p.shielded) {
-        p.hp -= pr.damage || 8;
-        updateHud();
-        onPlayerDamaged();
-        spawnParticles(p.x, p.y, pr.damage ? '#ff4d4d' : '#8b5cf6');
-        triggerShake(pr.damage ? 10 : 6);
-        applyKnockback(p, Math.atan2(pr.vy, pr.vx), pr.damage ? 200 : 120);
-        triggerHitstop(pr.damage ? 100 : 70);
-        if (p.hp <= 0) gameOver();
+
+    const directHit = pr.life > 0 && dist(pr, p) < pr.r + p.r;
+    const grenadeDetonate = pr.kind === 'grenade' && pr.life <= 0;
+    // A hazard-carrying bolt (toxic/acid) still leaves its cloud/puddle
+    // wherever it lands - obstacle collision or running out of range - even
+    // on a miss; only the direct player-damage/status block below actually
+    // requires a hit.
+    const boltLanded = pr.hazard && pr.kind !== 'grenade' && pr.life <= 0;
+    if (!directHit && !grenadeDetonate && !boltLanded) return;
+
+    const inSplash = pr.splash ? dist(pr, p) < pr.splash + p.r : directHit;
+    pr.life = 0;
+    if (inSplash && !p.shielded) {
+      p.hp -= pr.damage || 8;
+      updateHud();
+      onPlayerDamaged();
+      spawnParticles(p.x, p.y, pr.color || (pr.damage ? '#ff4d4d' : '#8b5cf6'));
+      triggerShake(pr.damage ? 10 : 6);
+      applyKnockback(p, Math.atan2(pr.vy, pr.vx), pr.damage ? 200 : 120);
+      triggerHitstop(pr.damage ? 100 : 70);
+      if (pr.status === 'dot') {
+        p.dotUntil = Math.max(p.dotUntil || 0, performance.now() + pr.statusDur);
+        p.dotDps = pr.statusDps;
+      } else if (pr.status === 'chill') {
+        p.chillUntil = performance.now() + pr.statusDur;
+        p.chillMul = pr.slowMul;
       }
+      if (p.hp <= 0) return gameOver();
+    }
+    if (pr.hazard) {
+      state.hazards.push({ x: pr.x, y: pr.y, r: pr.hazardR, expiresAt: performance.now() + pr.hazardDur, dps: pr.statusDps || 3, color: pr.color });
+    }
+    if (pr.kind === 'grenade') {
+      spawnParticles(pr.x, pr.y, pr.color || '#ffb020');
+      triggerShake(8);
     }
   });
   state.enemyProjectiles = state.enemyProjectiles.filter((pr) => pr.life > 0);
+
+  // Ground hazard zones left by toxic/plague/acid attacks - tick damage into
+  // the player while they stand inside, same shield-blocks-everything rule
+  // as every other damage source.
+  state.hazards = state.hazards.filter((hz) => {
+    if (performance.now() > hz.expiresAt) return false;
+    if (!p.shielded && dist(hz, p) < hz.r + p.r) {
+      p.hp -= hz.dps * dt;
+      updateHud();
+      if (Math.random() < 0.12) spawnParticles(p.x, p.y, hz.color || '#7cff3d');
+      if (p.hp <= 0) gameOver();
+    }
+    return true;
+  });
 
   // Bullets vs obstacles
   state.bullets.forEach((b) => {
@@ -1482,6 +1717,8 @@ function update(dt, now) {
         // Bosses are heavier - half the knockback impulse.
         applyKnockback(e, Math.atan2(b.vy, b.vx), (e.boss ? 100 : 200) * (b.knockbackMul || 1));
         if (e.boss) triggerHitstop(90);
+        if (b.freeze) e.frozenUntil = performance.now() + 1200;
+        if (b.poison) { e.poisonUntil = performance.now() + 2500; e.poisonDps = 1.2; }
         if (e.hp <= 0) {
           triggerShake(e.boss ? 8 : 2);
           triggerHitstop(60);
@@ -1808,6 +2045,17 @@ function render() {
   drawWarBackground(ctx, now);
   drawObstacles();
 
+  // Ground hazard zones (toxic/plague/acid) - pulsing translucent pools.
+  state.hazards.forEach((hz) => {
+    ctx.save();
+    ctx.globalAlpha = 0.28 + 0.1 * Math.sin(now * 6);
+    ctx.fillStyle = hz.color || '#7cff3d';
+    ctx.beginPath();
+    ctx.ellipse(hz.x, hz.y, hz.r, hz.r * 0.55, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  });
+
   // Allies (hover-bob + rotating turret)
   state.allies.forEach((a) => {
     const bob = Math.sin(now * 4 + a.bobSeed) * 3;
@@ -1823,7 +2071,7 @@ function render() {
   state.enemies.forEach((e) => {
     const bob = Math.sin(now * 5 + e.bobSeed) * 2;
     const sprite = e.boss ? SPRITES.boss : (SPRITES[e.type] || SPRITES.enemy);
-    let size = e.boss ? 76 : e.type === 'swarmer' ? 22 : e.type === 'brute' ? 54 : e.type === 'grunt' ? 32 : 40;
+    let size = e.boss ? 76 : e.type === 'swarmer' ? 22 : e.type === 'brute' ? 54 : HEAVY_ELITE_TYPES.has(e.type) ? 52 : e.type === 'grunt' ? 32 : 40;
     if (e.type === 'dasher' && e.dashMode === 'telegraph') {
       const progress = 1 - Math.min(1, e.dashTimer / 0.5);
       size *= 1 - 0.35 * Math.sin(progress * Math.PI);
@@ -1853,13 +2101,23 @@ function render() {
       drawSprite(ctx, sprite, e.x, e.y + bob, size, e.facingLeft);
       ctx.restore();
     }
+    if (e.frozenUntil && performance.now() < e.frozenUntil) {
+      ctx.save();
+      ctx.globalAlpha = 0.4;
+      ctx.fillStyle = '#8fe0ff';
+      ctx.beginPath();
+      ctx.arc(e.x, e.y + bob, size * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
   });
 
   // Sniper projectiles are small violet pixel bolts; brute projectiles are
   // bigger and blood-red so its heavy hit reads as more dangerous on sight.
+  // Elemental elites carry their own pr.color, which takes priority.
   state.enemyProjectiles.forEach((pr) => {
-    const color = pr.damage ? '#ff4d4d' : '#8b5cf6';
-    const half = pr.damage ? 5 : 3;
+    const color = pr.color || (pr.damage ? '#ff4d4d' : '#8b5cf6');
+    const half = pr.r ? pr.r - 1 : pr.damage ? 5 : 3;
     ctx.fillStyle = color;
     ctx.globalAlpha = 0.35;
     ctx.fillRect(pr.x - pr.vx * 0.015 - half, pr.y - pr.vy * 0.015 - half, half * 2, half * 2);
