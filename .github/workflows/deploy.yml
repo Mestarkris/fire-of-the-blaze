@@ -13,12 +13,6 @@ jobs:
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
-          password: ${{ secrets.VPS_PASSWORD }}
+          key: ${{ secrets.VPS_SSH_KEY }}
           script_stop: true
-          script: |
-            cd /home/mestarkris/fire-of-the-blaze
-            git pull origin main
-            npm install --omit=dev
-            ~/.npm-global/bin/pm2 restart fire-of-the-blaze
-            sleep 2
-            ~/.npm-global/bin/pm2 list
+          script: /home/mestarkris/deploy.sh
