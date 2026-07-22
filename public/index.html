@@ -106,6 +106,7 @@
       <div class="rule"><span class="tag">Move</span> WASD or arrow keys (drag the on-screen joystick on mobile)</div>
       <div class="rule"><span class="tag">Aim & Shoot</span> point with the mouse, click and hold to fire (auto-aims on mobile - use the shoot button)</div>
       <div class="rule"><span class="tag">Shield</span> Shift key for a brief invincibility window, on a cooldown (or the shield button on mobile)</div>
+      <div class="rule"><span class="tag">Defenders</span> keys 1-4 (or tap their slots) summon a backup fighter for 15s - each has its own weapon, a one-shot power on arrival, and its own long cooldown</div>
       <div class="rule"><span class="tag">Pause</span> Esc or P</div>
       <div class="rule"><span class="tag">Chat</span> your live Blaze chat is the game master - !spawn, !heal, !shield, !slow, !taunt, follows, subs, votes, and tips all affect the run in real time</div>
       <div class="rule"><span class="tag">Vibe</span> the HELP/CHAOS gauge tracks whether chat's been helping or piling on - lean far enough either way and it starts to matter</div>
@@ -157,6 +158,13 @@
     </div>
     <button id="shoot-btn" class="shoot-btn" aria-label="Shoot">&#9670;</button>
     <button id="shield-btn" class="shield-btn ready" aria-label="Shield">&#9679;</button>
+  </div>
+
+  <div id="defender-bar" class="defender-bar">
+    <div class="def-slot" data-def="gunner"><span class="def-key">1</span><span class="def-name">GUNNER</span><div class="def-timer"><div class="def-timer-fill"></div></div><div class="def-cd"></div></div>
+    <div class="def-slot" data-def="sniper"><span class="def-key">2</span><span class="def-name">SNIPER</span><div class="def-timer"><div class="def-timer-fill"></div></div><div class="def-cd"></div></div>
+    <div class="def-slot" data-def="bomber"><span class="def-key">3</span><span class="def-name">BOMBER</span><div class="def-timer"><div class="def-timer-fill"></div></div><div class="def-cd"></div></div>
+    <div class="def-slot" data-def="voltage"><span class="def-key">4</span><span class="def-name">VOLTAGE</span><div class="def-timer"><div class="def-timer-fill"></div></div><div class="def-cd"></div></div>
   </div>
 
   <div id="ticker" class="ticker"></div>

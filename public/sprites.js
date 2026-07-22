@@ -40,6 +40,14 @@ const PALETTES = {
   frostguard: { '#': '#021a24', A: '#5fc4ff', B: '#1f6f96', C: '#c8f0ff' },
   plague: { '#': '#0a1f05', A: '#4fdb3d', B: '#2c8a1e', C: '#a0ff8a' },
   inferno: { '#': '#4a0800', A: '#ff3d1a', B: '#8a1400', C: '#ffb066' },
+
+  // Player-summoned defenders (keys 1-4, see the Defender block in game.js).
+  // Their accent colors are deliberately distinct from the player's gold,
+  // the follow-ally's cyan, and every weapon-pickup color already in play.
+  defGunner: { '#': '#1a2405', A: '#d0ff3d', B: '#8aa826', C: '#f4ffd0' },
+  defSniper: { '#': '#20063a', A: '#b44dff', B: '#7a2fb3', C: '#ecd4ff' },
+  defBomber: { '#': '#331505', A: '#ff9d5a', B: '#b3642f', C: '#ffe3c8' },
+  defVoltage: { '#': '#03282e', A: '#9dfbff', B: '#3fa8b8', C: '#ffffff' },
 };
 
 // Player, frame 1 (legs together) - 10x10
@@ -154,6 +162,57 @@ const ELITE_HEAVY = [
   '##....##',
 ];
 
+// ---- Defender sprites (see the Defender summon block in game.js) ----------
+// Gunner - squared-off soldier with a bright visor band; reads as "military
+// backup" next to the rounder ally drone.
+const DEF_GUNNER = [
+  '..####..',
+  '.#AAAA#.',
+  '#ACCCCA#',
+  '#ABBBBA#',
+  '#AABBAA#',
+  '.#AAAA#.',
+  '..#AA#..',
+  '.##..##.',
+];
+
+// Sniper - tall narrow diamond with a bright scope pixel, echoing the enemy
+// sniper's silhouette language ("this thing shoots far") in friendly colors.
+const DEF_SNIPER = [
+  '...##...',
+  '..#AA#..',
+  '.#ACCA#.',
+  '.#ABBA#.',
+  '#AABBAA#',
+  '.#ABBA#.',
+  '..#AA#..',
+  '..#..#..',
+];
+
+// Bomber - wide, round, and squat; the bulkiest friendly on the field.
+const DEF_BOMBER = [
+  '..####..',
+  '.#AAAA#.',
+  '#AABBAA#',
+  '#ABCCBA#',
+  '#ABCCBA#',
+  '#AABBAA#',
+  '.######.',
+  '..#..#..',
+];
+
+// Voltage - spiky corners like a static-charged capacitor.
+const DEF_VOLTAGE = [
+  '#..##..#',
+  '.#AAAA#.',
+  '#ACBBCA#',
+  '.#BCCB#.',
+  '.#BCCB#.',
+  '#ACBBCA#',
+  '.#AAAA#.',
+  '#..##..#',
+];
+
 const BOSS = [
   '...####...',
   '..#AAAAAA#',
@@ -210,6 +269,10 @@ const SPRITES = {
   frostguard: renderSpriteToCanvas(ELITE_HEAVY, PALETTES.frostguard),
   plague: renderSpriteToCanvas(ELITE_HEAVY, PALETTES.plague),
   inferno: renderSpriteToCanvas(ELITE_HEAVY, PALETTES.inferno),
+  def_gunner: renderSpriteToCanvas(DEF_GUNNER, PALETTES.defGunner),
+  def_sniper: renderSpriteToCanvas(DEF_SNIPER, PALETTES.defSniper),
+  def_bomber: renderSpriteToCanvas(DEF_BOMBER, PALETTES.defBomber),
+  def_voltage: renderSpriteToCanvas(DEF_VOLTAGE, PALETTES.defVoltage),
 };
 
 // Draw a sprite centered at (x, y), optionally flipped horizontally,

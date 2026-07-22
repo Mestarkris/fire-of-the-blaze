@@ -88,7 +88,7 @@ window.addEventListener('resize', resizeCanvas);
 // ---------------------------------------------------------------------------
 
 const state = {
-  player: { x: 0, y: 0, r: 16, hp: 100, maxHp: 100, speed: 260, shielded: false, shieldUntil: 0, facingLeft: false, kx: 0, ky: 0, vx: 0, vy: 0, gunAngle: 0, dotUntil: 0, dotDps: 0, chillUntil: 0, chillMul: 1 },
+  player: { x: 0, y: 0, r: 16, hp: 100, maxHp: 100, speed: 260, shielded: false, shieldUntil: 0, facingLeft: false, kx: 0, ky: 0, vx: 0, vy: 0, gunAngle: 0, dotUntil: 0, dotDps: 0, chillUntil: 0, chillMul: 1, auraUntil: 0 },
   bullets: [],
   enemyProjectiles: [],
   enemies: [],
@@ -132,10 +132,21 @@ const state = {
   // See nudgeTension()/updateTensionEffects() for how this is driven and
   // what it does to the run.
   tension: 0.5,
+  // Defender summons (keys 1-4) - at most one active at a time, but a
+  // replaced/expired one keeps existing in fleeingDefenders until it has
+  // visibly run off-screen. Cooldowns are per-type and independent.
+  defender: null,
+  fleeingDefenders: [],
+  defenderCooldowns: { gunner: 0, sniper: 0, bomber: 0, voltage: 0 },
+  voltArcs: [],
+  mines: [],
 };
 
-const SHIELD_ABILITY_DURATION = 2000;
-const SHIELD_ABILITY_COOLDOWN = 12000;
+// 20s of invulnerability needs a cooldown comfortably longer than the
+// duration - the old 12s cooldown would have meant the shield could be
+// reactivated before it even ran out, i.e. permanent invincibility.
+const SHIELD_ABILITY_DURATION = 20000;
+const SHIELD_ABILITY_COOLDOWN = 45000;
 
 // ---------------------------------------------------------------------------
 // Help vs Chaos tension - a rolling read on whether chat has recently been
@@ -167,6 +178,317 @@ function tensionPlayerDamageMul() {
   const t = (TENSION_HELP_THRESHOLD - state.tension) / TENSION_HELP_THRESHOLD;
   return 1 + t * TENSION_MAX_BONUS;
 }
+
+// ---------------------------------------------------------------------------
+// Defender summons - four player-activated backup units on keys 1-4 (or by
+// tapping their HUD slots on mobile). A parallel system to the follow-
+// triggered ally (state.allies): defenders are summoned deliberately, fight
+// for 15 seconds, then visibly flee off-screen, and each type has both a
+// unique weapon and a one-shot "superpower" that fires the moment it lands.
+// Only one can be active at once; summoning a new one sends the current one
+// fleeing early (replace, not block - see summonDefender). Each type's
+// cooldown starts at summon and is tracked independently of the other three.
+// Defenders also matter defensively: enemies aggro onto whichever of
+// player/defender is closer, and enemy fire/contact damages defender HP.
+// ---------------------------------------------------------------------------
+
+const DEFENDER_DURATION_MS = 15000;
+
+// speed/keepDist drive the combat-movement AI in updateDefender: defenders
+// are elite units - faster than almost everything on the field - that kite
+// at their preferred range, strafe while firing, and actively sidestep
+// incoming enemy projectiles rather than standing there soaking them.
+const DEFENDER_DEFS = {
+  gunner: { key: '1', name: 'GUNNER', color: '#d0ff3d', hp: 80, cooldownMs: 60000, speed: 310, keepDist: 240 },
+  sniper: { key: '2', name: 'SNIPER', color: '#b44dff', hp: 60, cooldownMs: 120000, speed: 330, keepDist: 330 },
+  bomber: { key: '3', name: 'BOMBER', color: '#ff9d5a', hp: 110, cooldownMs: 180000, speed: 270, keepDist: 280 },
+  voltage: { key: '4', name: 'VOLTAGE', color: '#9dfbff', hp: 75, cooldownMs: 240000, speed: 350, keepDist: 230 },
+};
+
+// Arrival / departure / overrun one-liners, reusing the speech-bubble system
+// (text-only - no pre-generated voice files exist for these).
+const DEFENDER_QUIPS = {
+  gunner: { in: 'Covering fire!', out: 'Ammo dry - pulling out!', down: 'Man down...' },
+  sniper: { in: 'Targets marked.', out: 'Repositioning.', down: 'Spotted...' },
+  bomber: { in: 'Knock knock!', out: "That's my exit!", down: 'Out with a bang...' },
+  voltage: { in: 'Lights out!', out: 'Power down.', down: 'Short... circuit...' },
+};
+
+// Sniper-defender mark: marked enemies take +50% damage from EVERY source
+// (player bullets, beam, flame, rockets, chain lightning - all damage paths
+// route through this multiplier) and pay out 1.5x score if killed while the
+// mark is live.
+function enemyMarkMul(e) {
+  return e.markedUntil && performance.now() < e.markedUntil ? 1.5 : 1;
+}
+
+// Gunner-defender aura: the player takes half damage while it's up. Distinct
+// from the shield (full invulnerability) - an aura'd hit still hurts and
+// still knocks back, it just hurts less.
+function playerDamageMul() {
+  return performance.now() < (state.player.auraUntil || 0) ? 0.5 : 1;
+}
+
+function summonDefender(type) {
+  if (!state.running || state.paused) return;
+  const nowMs = performance.now();
+  if (nowMs < (state.defenderCooldowns[type] || 0)) {
+    flashDefenderSlot(type);
+    return;
+  }
+  // Replace, don't block: summoning while another defender is out sends the
+  // current one fleeing early and brings in the new one. Blocking would make
+  // the keypress feel dead and punish an intentional tactical swap; the
+  // real cost of swapping is already paid via the replaced defender's burned
+  // cooldown, so replace is both more responsive and still a real tradeoff.
+  if (state.defender) startDefenderFlee(state.defender);
+
+  const def = DEFENDER_DEFS[type];
+  let x, y, attempts = 0;
+  do {
+    const ang = Math.random() * Math.PI * 2;
+    x = state.player.x + Math.cos(ang) * 80;
+    y = state.player.y + Math.sin(ang) * 80;
+    attempts++;
+  } while ((insideObstacle(x, y) || x < 40 || x > canvas.width - 40 || y < 100 || y > canvas.height - 40) && attempts < 20);
+
+  state.defender = {
+    type, x, y, r: 14, hp: def.hp,
+    expiresAt: nowMs + DEFENDER_DURATION_MS,
+    fleeing: false,
+    fireCooldown: 0.4,
+    bobSeed: Math.random() * Math.PI * 2,
+    facingLeft: false, kx: 0, ky: 0,
+    strafeDir: Math.random() < 0.5 ? 1 : -1,
+    strafeTimer: 1 + Math.random() * 1.5,
+  };
+  state.defenderCooldowns[type] = nowMs + def.cooldownMs;
+  spawnParticles(x, y, def.color);
+  trySpawnSpeechBubble(state.defender, DEFENDER_QUIPS[type].in, { borderColor: def.color, duration: 1.8 });
+
+  // One-shot summon superpower, fired the moment the defender lands:
+  if (type === 'gunner') {
+    // Damage-reduction aura on the player for the full deployment.
+    state.player.auraUntil = nowMs + DEFENDER_DURATION_MS;
+  } else if (type === 'sniper') {
+    // Mark the 3 nearest enemies - see enemyMarkMul.
+    state.enemies
+      .filter((e) => e.hp > 0)
+      .sort((a, b) => dist(a, state.player) - dist(b, state.player))
+      .slice(0, 3)
+      .forEach((e) => { e.markedUntil = nowMs + DEFENDER_DURATION_MS; });
+  } else if (type === 'bomber') {
+    // Knockback shockwave from the landing point (bosses shoved half as far).
+    state.enemies.forEach((e) => {
+      if (dist(e, { x, y }) < 220) applyKnockback(e, Math.atan2(e.y - y, e.x - x), e.boss ? 210 : 420);
+    });
+    triggerShake(12);
+  } else if (type === 'voltage') {
+    // Stun burst - see the `stunned` guard in the enemy update loop.
+    state.enemies.forEach((e) => {
+      if (dist(e, { x, y }) < 240) {
+        e.stunnedUntil = nowMs + 1500;
+        spawnParticles(e.x, e.y, def.color);
+      }
+    });
+    triggerShake(8);
+  }
+  updateDefenderHud();
+}
+
+function startDefenderFlee(d) {
+  if (d.fleeing) return;
+  d.fleeing = true;
+  // Run for whichever arena edge is closest, at well above fighting pace.
+  const exits = [
+    { vx: -1, vy: 0, dEdge: d.x },
+    { vx: 1, vy: 0, dEdge: canvas.width - d.x },
+    { vx: 0, vy: -1, dEdge: d.y },
+    { vx: 0, vy: 1, dEdge: canvas.height - d.y },
+  ].sort((a, b) => a.dEdge - b.dEdge);
+  d.fleeVx = exits[0].vx;
+  d.fleeVy = exits[0].vy;
+  d.facingLeft = d.fleeVx < 0;
+  trySpawnSpeechBubble(d, DEFENDER_QUIPS[d.type].out, { borderColor: DEFENDER_DEFS[d.type].color, duration: 1.6 });
+  state.fleeingDefenders.push(d);
+  if (state.defender === d) state.defender = null;
+}
+
+function updateDefender(dt, now) {
+  const d = state.defender;
+  if (d) {
+    if (d.hp <= 0) {
+      // Overrun before its timer - no orderly retreat, just gone in a burst.
+      spawnParticles(d.x, d.y, DEFENDER_DEFS[d.type].color);
+      spawnParticles(d.x, d.y, '#ffffff');
+      triggerShake(6);
+      trySpawnSpeechBubble(d, DEFENDER_QUIPS[d.type].down, { borderColor: DEFENDER_DEFS[d.type].color, duration: 1.6 });
+      state.defender = null;
+    } else if (now >= d.expiresAt) {
+      startDefenderFlee(d);
+    } else {
+      decayKnockback(d, dt);
+      d.fireCooldown -= dt;
+      const def = DEFENDER_DEFS[d.type];
+      const target = nearest(d, state.enemies.filter((e) => e.hp > 0));
+
+      // -- Combat movement: kite at keepDist, strafe while firing ----------
+      let mvx = 0, mvy = 0;
+      if (target) {
+        const dT = dist(d, target);
+        const away = Math.atan2(d.y - target.y, d.x - target.x);
+        if (dT < def.keepDist - 30) {
+          // Too close - back off hard.
+          mvx += Math.cos(away);
+          mvy += Math.sin(away);
+        } else if (dT > def.keepDist + 80) {
+          // Too far to fight effectively - close in.
+          mvx -= Math.cos(away) * 0.7;
+          mvy -= Math.sin(away) * 0.7;
+        } else {
+          // In the pocket - circle-strafe, flipping direction periodically
+          // so the orbit doesn't look mechanical.
+          d.strafeTimer -= dt;
+          if (d.strafeTimer <= 0) {
+            d.strafeDir *= -1;
+            d.strafeTimer = 1 + Math.random() * 1.5;
+          }
+          mvx += Math.cos(away + (Math.PI / 2) * d.strafeDir) * 0.8;
+          mvy += Math.sin(away + (Math.PI / 2) * d.strafeDir) * 0.8;
+        }
+      }
+
+      // -- Projectile dodging: sidestep anything incoming ------------------
+      // For each enemy shot closing on the defender, check how near its
+      // current flight line passes; if it's a hit trajectory, add a strong
+      // perpendicular impulse away from the line. Summed over all nearby
+      // threats, so crossfire produces a best-effort escape vector.
+      state.enemyProjectiles.forEach((pr) => {
+        const dx = d.x - pr.x, dy = d.y - pr.y;
+        const dd = Math.hypot(dx, dy);
+        if (dd > 200) return;
+        const spd = Math.hypot(pr.vx, pr.vy) || 1;
+        const closing = (dx * pr.vx + dy * pr.vy) / spd;
+        if (closing <= 0) return; // flying away from us
+        const lineDist = Math.abs(dx * pr.vy - dy * pr.vx) / spd;
+        if (lineDist < d.r + pr.r + 30) {
+          const side = dx * pr.vy - dy * pr.vx > 0 ? 1 : -1;
+          mvx += (-pr.vy / spd) * side * 2.2;
+          mvy += (pr.vx / spd) * side * 2.2;
+        }
+      });
+
+      const mvLen = Math.hypot(mvx, mvy);
+      if (mvLen > 0.01) {
+        d.x += (mvx / mvLen) * def.speed * dt;
+        d.y += (mvy / mvLen) * def.speed * dt;
+      }
+      d.x = Math.max(d.r, Math.min(canvas.width - d.r, d.x));
+      d.y = Math.max(90, Math.min(canvas.height - d.r, d.y));
+      resolveObstacleCollision(d);
+
+      // -- Attacks ---------------------------------------------------------
+      if (target && d.fireCooldown <= 0) {
+        const dTo = dist(d, target);
+        if (d.type === 'gunner' && dTo < 540) {
+          // Rapid rifle - moderate per-shot damage, relentless cadence.
+          d.fireCooldown = 0.16;
+          const a = Math.atan2(target.y - d.y, target.x - d.x);
+          state.bullets.push({ x: d.x, y: d.y, vx: Math.cos(a) * 620, vy: Math.sin(a) * 620, r: 3, life: 1.0, damage: 0.9, color: def.color });
+        } else if (d.type === 'sniper' && dTo < 720) {
+          // Slow piercing bolt - hitSet makes it punch through a whole line.
+          d.fireCooldown = 1.25;
+          const a = Math.atan2(target.y - d.y, target.x - d.x);
+          state.bullets.push({ x: d.x, y: d.y, vx: Math.cos(a) * 1000, vy: Math.sin(a) * 1000, r: 5, life: 0.8, damage: 5, color: def.color, hitSet: new Set() });
+        } else if (d.type === 'bomber' && dTo < 520) {
+          // Lobbed grenade - flight time scales with distance, detonates
+          // where it lands (or on whatever it hits first) with real splash.
+          d.fireCooldown = 1.8;
+          const a = Math.atan2(target.y - d.y, target.x - d.x);
+          const flight = Math.min(1.6, Math.max(0.5, dTo / 240));
+          state.bullets.push({ x: d.x, y: d.y, vx: Math.cos(a) * 240, vy: Math.sin(a) * 240, r: 6, life: flight, damage: 1, color: def.color, explosive: true, grenade: true, splashR: 100, splashDmg: 3 });
+        } else if (d.type === 'voltage' && dTo < 460) {
+          // Chain lightning - nearest enemy, then arcs to up to 2 more
+          // within 180px of each previous link, damage falling off per hop.
+          d.fireCooldown = 1.1;
+          const hits = [target];
+          let last = target;
+          for (let i = 0; i < 2; i++) {
+            const next = nearest(last, state.enemies.filter((e) => e.hp > 0 && !hits.includes(e)));
+            if (!next || dist(last, next) > 180) break;
+            hits.push(next);
+            last = next;
+          }
+          state.voltArcs.push({ segs: [[d.x, d.y], ...hits.map((e) => [e.x, e.y])], age: 0 });
+          hits.forEach((e, i) => {
+            e.hp -= (2.0 - i * 0.35) * enemyMarkMul(e);
+            e.hitFlash = 1;
+            spawnParticles(e.x, e.y, def.color);
+            if (e.hp <= 0) { triggerShake(e.boss ? 8 : 2); triggerHitstop(60); }
+          });
+        }
+      }
+    }
+  }
+
+  // Predecessors sprinting off-screen - culled once fully outside the arena.
+  state.fleeingDefenders.forEach((f) => {
+    f.x += (f.fleeVx || 0) * 460 * dt;
+    f.y += (f.fleeVy || 0) * 460 * dt;
+  });
+  state.fleeingDefenders = state.fleeingDefenders.filter(
+    (f) => f.x > -50 && f.x < canvas.width + 50 && f.y > -50 && f.y < canvas.height + 50
+  );
+
+  // Chain-lightning arc flashes fade fast - short-lived by design.
+  state.voltArcs.forEach((a) => { a.age += dt; });
+  state.voltArcs = state.voltArcs.filter((a) => a.age < 0.18);
+}
+
+function updateDefenderHud() {
+  const nowMs = performance.now();
+  document.querySelectorAll('.def-slot').forEach((slot) => {
+    const type = slot.dataset.def;
+    const active = state.defender && state.defender.type === type;
+    const cdLeft = (state.defenderCooldowns[type] || 0) - nowMs;
+    slot.classList.toggle('active', !!active);
+    slot.classList.toggle('ready', !active && cdLeft <= 0);
+    slot.classList.toggle('cooldown', !active && cdLeft > 0);
+    if (!active && cdLeft > 0) slot.querySelector('.def-cd').textContent = Math.ceil(cdLeft / 1000);
+    if (active) {
+      const frac = Math.max(0, (state.defender.expiresAt - nowMs) / DEFENDER_DURATION_MS);
+      slot.querySelector('.def-timer-fill').style.width = frac * 100 + '%';
+    }
+    slot.style.borderColor = active || cdLeft <= 0 ? DEFENDER_DEFS[type].color : '#2c303a';
+  });
+}
+
+function flashDefenderSlot(type) {
+  const slot = document.querySelector(`.def-slot[data-def="${type}"]`);
+  if (!slot) return;
+  slot.classList.remove('denied');
+  void slot.offsetWidth; // restart the CSS animation if it was mid-flash
+  slot.classList.add('denied');
+  GameAudio.playPlayerHit(); // dull thunk doubles as the "not ready" sound
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  const type = { 1: 'gunner', 2: 'sniper', 3: 'bomber', 4: 'voltage' }[e.key];
+  if (type) summonDefender(type);
+});
+
+document.querySelectorAll('.def-slot').forEach((slot) => {
+  const type = slot.dataset.def;
+  slot.style.color = DEFENDER_DEFS[type].color;
+  slot.querySelector('.def-timer-fill').style.background = DEFENDER_DEFS[type].color;
+  // pointerdown covers mouse and touch alike - tapping the slot is also the
+  // mobile summon path, since phones have no number-key row.
+  slot.addEventListener('pointerdown', (ev) => {
+    ev.preventDefault();
+    summonDefender(type);
+  });
+});
 
 // Small blocky pixel-heart icon for health pickups - a different silhouette
 // from the weapon diamonds so the two pickup types are distinguishable at a
@@ -200,15 +522,23 @@ const WEAPON_DEFS = {
   // b.freeze handling below), sapping its speed for a couple seconds so
   // its power is crowd control rather than raw DPS.
   ice: { color: '#8fe0ff', fireRate: 260, damage: 1.1, mode: 'ice' },
-  // Poison dart - weak on impact but tags the enemy with a damage-over-time
-  // tick (b.poison), so its power is "keeps dealing damage after you move on".
+  // Poison dart - weak on impact, but the venom DRAINS: each hit applies a
+  // 4-second damage-over-time tick, and repeat hits on the same enemy stack
+  // the drain stronger (see the b.poison handling in the bullet-hit loop).
+  // Tag a crowd and watch it wither while you kite.
   poison: { color: '#7cff3d', fireRate: 300, damage: 0.6, mode: 'poison' },
   // Laser - a near-instant hitscan-style bolt (very high speed, short life)
   // that pierces every enemy in its path, trading fire rate for a huge
   // single-press hit against a lined-up crowd.
   laser: { color: '#ff4dff', fireRate: 480, damage: 3, mode: 'laser' },
+  // Mine - clicking PLANTS a proximity bomb at the player's feet instead of
+  // firing a projectile. Mines arm after a short delay, blow when an enemy
+  // wanders close (or when their fuse runs out), and stay planted even after
+  // the weapon pickup itself expires - area denial you shape yourself.
+  mine: { color: '#d8dee8', fireRate: 400, damage: 3, mode: 'mine' },
 };
-const PICKUP_WEAPON_TYPES = ['spread', 'rapid', 'electric', 'ricochet', 'shotgun', 'rocket', 'flamethrower', 'ice', 'poison', 'laser'];
+const PICKUP_WEAPON_TYPES = ['spread', 'rapid', 'electric', 'ricochet', 'shotgun', 'rocket', 'flamethrower', 'ice', 'poison', 'laser', 'mine'];
+const MAX_MINES = 6;
 const WEAPON_DURATION_MS = 15000;
 
 const WAVE_DURATION = 30;
@@ -307,7 +637,7 @@ function resetState() {
   document.getElementById('pause-btn').innerHTML = '&#9208;';
   // Make sure no leftover dialogue from a previous run bleeds into this one.
   GameAudio.stopAllVoiceLines();
-  state.player = { x: canvas.width / 2, y: canvas.height / 2, r: 16, hp: 100, maxHp: 100, speed: 260, shielded: false, shieldUntil: 0, facingLeft: false, kx: 0, ky: 0, vx: 0, vy: 0, gunAngle: 0, dotUntil: 0, dotDps: 0, chillUntil: 0, chillMul: 1 };
+  state.player = { x: canvas.width / 2, y: canvas.height / 2, r: 16, hp: 100, maxHp: 100, speed: 260, shielded: false, shieldUntil: 0, facingLeft: false, kx: 0, ky: 0, vx: 0, vy: 0, gunAngle: 0, dotUntil: 0, dotDps: 0, chillUntil: 0, chillMul: 1, auraUntil: 0 };
   state.bullets = [];
   state.enemyProjectiles = [];
   state.enemies = [];
@@ -342,6 +672,11 @@ function resetState() {
   state.speechBubbles = [];
   state.killStreak = 0;
   state.tension = 0.5;
+  state.defender = null;
+  state.fleeingDefenders = [];
+  state.defenderCooldowns = { gunner: 0, sniper: 0, bomber: 0, voltage: 0 };
+  state.voltArcs = [];
+  state.mines = [];
   lastLineIndex = {};
   lastSpeechBubbleAt = 0;
   lastTauntBySender = {};
@@ -1187,7 +1522,7 @@ function updateElectricBeam(dt) {
     state.beamCooldown -= dt;
     if (state.beamCooldown <= 0) {
       state.beamCooldown = 0.06;
-      best.hp -= WEAPON_DEFS.electric.damage * tensionPlayerDamageMul();
+      best.hp -= WEAPON_DEFS.electric.damage * tensionPlayerDamageMul() * enemyMarkMul(best);
       best.hitFlash = 1;
       spawnParticles(best.x, best.y, '#4dd8ff');
       if (best.hp <= 0) {
@@ -1227,7 +1562,7 @@ function updateFlamethrower(dt) {
       let diff = Math.abs(angTo - angle);
       if (diff > Math.PI) diff = Math.PI * 2 - diff;
       if (diff > halfAngle) return;
-      e.hp -= WEAPON_DEFS.flamethrower.damage * tensionPlayerDamageMul();
+      e.hp -= WEAPON_DEFS.flamethrower.damage * tensionPlayerDamageMul() * enemyMarkMul(e);
       e.hitFlash = 1;
       spawnParticles(e.x, e.y, '#ff9d3d');
       applyKnockback(e, angTo, 20);
@@ -1251,7 +1586,7 @@ function explodeAt(x, y, radius, damage) {
     if (e.hp <= 0) return;
     const d = Math.hypot(e.x - x, e.y - y);
     if (d < radius + e.r) {
-      e.hp -= damage;
+      e.hp -= damage * enemyMarkMul(e);
       e.hitFlash = 1;
       applyKnockback(e, Math.atan2(e.y - y, e.x - x), e.boss ? 90 : 180);
       if (e.hp <= 0) triggerShake(e.boss ? 8 : 2);
@@ -1349,13 +1684,17 @@ function lerpAngle(current, target, t) {
 function seedObstacles() {
   state.obstacles = [];
   let attempts = 0;
-  while (state.obstacles.length < 5 && attempts < 40) {
+  // 10 cover blocks (up from 5) so there's almost always a brick within
+  // dodging distance at any angle. The spacing check keeps them from
+  // clumping into one wall, and the center stays clear for the spawn.
+  while (state.obstacles.length < 10 && attempts < 120) {
     attempts++;
     const hw = 24 + Math.random() * 20;
     const hh = 24 + Math.random() * 20;
     const x = hw + Math.random() * (canvas.width - hw * 2);
     const y = hh + Math.random() * (canvas.height - hh * 2);
     if (Math.hypot(x - canvas.width / 2, y - canvas.height / 2) < 160) continue;
+    if (state.obstacles.some((o) => Math.hypot(x - o.x, y - o.y) < 150)) continue;
     state.obstacles.push({ x, y, hw, hh });
   }
 }
@@ -1453,6 +1792,8 @@ function update(dt, now) {
   // recent chat mood, not a permanent all-run drift toward one edge.
   state.tension += (0.5 - state.tension) * Math.min(1, dt * 0.06);
   updateTensionHud();
+  // Cooldown countdowns keep ticking on the HUD even through hitstop frames.
+  updateDefenderHud();
 
   // Hitstop: freeze movement/collision/AI for a few real milliseconds on an
   // impactful hit. Input keeps being captured by the listeners above (they
@@ -1465,7 +1806,7 @@ function update(dt, now) {
   // Elemental status effects from elite enemy attacks/hazard zones - dot
   // ticks damage over time (fire/poison), chill saps top speed (ice).
   if (p.dotUntil && now < p.dotUntil) {
-    p.hp -= (p.dotDps || 0) * dt;
+    p.hp -= (p.dotDps || 0) * dt * playerDamageMul();
     updateHud();
     if (Math.random() < 0.15) spawnParticles(p.x, p.y, '#7cff3d');
     if (p.hp <= 0) return gameOver();
@@ -1603,6 +1944,15 @@ function update(dt, now) {
           r: 5, life: 0.4, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
           hitSet: new Set(),
         });
+      } else if (weaponDef.mode === 'mine') {
+        // Plant at the player's feet rather than firing toward the aim
+        // point. Planting past the cap detonates the OLDEST mine where it
+        // sits - the field never silently swallows a plant.
+        if (state.mines.length >= MAX_MINES) {
+          const oldest = state.mines.shift();
+          explodeAt(oldest.x, oldest.y, 110, 3);
+        }
+        state.mines.push({ x: p.x, y: p.y, armAt: now + 400, expiresAt: now + 8000 });
       } else {
         state.bullets.push({
           x: p.x, y: p.y, vx: Math.cos(angle) * 620, vy: Math.sin(angle) * 620,
@@ -1651,6 +2001,15 @@ function update(dt, now) {
       }
     }
   });
+  // Bomber-defender grenades detonate where they land when their flight time
+  // runs out, not only on a direct hit (unlike player rockets, which keep
+  // their original hit-or-obstacle-only explosion).
+  state.bullets.forEach((b) => {
+    if (b.life <= 0 && b.grenade && !b.detonated) {
+      b.detonated = true;
+      explodeAt(b.x, b.y, b.splashR || 90, b.splashDmg || 2.5);
+    }
+  });
   state.bullets = state.bullets.filter((b) => b.life > 0);
 
   // Health pickups - collection/expiry check. Scheduling (when a pickup is
@@ -1685,10 +2044,17 @@ function update(dt, now) {
   // Enemies - movement/attack AI branches per archetype; knockback,
   // obstacle collision, and contact damage stay shared across all of them.
   state.enemies.forEach((e) => {
-    const idealAngle = Math.atan2(p.y - e.y, p.x - e.x);
+    // A live (non-fleeing) defender competes with the player for aggro -
+    // each enemy chases and shoots at whichever is closer, so summoning a
+    // defender genuinely peels enemies off the player rather than just
+    // adding side damage.
+    const defTarget = state.defender && !state.defender.fleeing ? state.defender : null;
+    const aggro = defTarget && dist(e, defTarget) < dist(e, p) ? defTarget : p;
+    const idealAngle = Math.atan2(aggro.y - e.y, aggro.x - e.x);
     // Frozen (ice weapon) stacks on top of the chat !slow effect rather than
     // replacing it, so both sources of slow feel consistent with each other.
     const frozen = now < (e.frozenUntil || 0);
+    const stunned = now < (e.stunnedUntil || 0);
     const speedMul = (slowed ? 0.35 : 1) * (frozen ? 0.4 : 1);
 
     if (e.poisonUntil && now < e.poisonUntil && e.hp > 0) {
@@ -1696,8 +2062,13 @@ function update(dt, now) {
       if (Math.random() < 0.2) spawnParticles(e.x, e.y, '#7cff3d');
     }
 
-    if (e.type === 'sniper') {
-      const d = dist(e, p);
+    if (stunned) {
+      // Voltage stun - frozen in place, weapons held. Movement and every
+      // attack branch below are skipped; knockback/collision/death handling
+      // further down still apply, so a stunned enemy remains fully killable.
+      if (Math.random() < 0.08) spawnParticles(e.x, e.y, '#fff2a0');
+    } else if (e.type === 'sniper') {
+      const d = dist(e, aggro);
       let targetAngle;
       if (d < 250) targetAngle = idealAngle + Math.PI;
       else if (d > 300) targetAngle = idealAngle;
@@ -1720,7 +2091,7 @@ function update(dt, now) {
       // Keeps its distance like a sniper but turns slower - a heavier,
       // more deliberate threat - and fires the hardest-hitting enemy shot
       // in the game on a slow cooldown.
-      const d = dist(e, p);
+      const d = dist(e, aggro);
       let targetAngle;
       if (d < 220) targetAngle = idealAngle + Math.PI;
       else if (d > 320) targetAngle = idealAngle;
@@ -1773,7 +2144,7 @@ function update(dt, now) {
       // all 10 elemental enemies reuse one movement/attack block instead of
       // each needing its own hand-written branch.
       const cfg = ELITE_ATTACK[e.type];
-      const d = dist(e, p);
+      const d = dist(e, aggro);
       let targetAngle;
       if (d < 220) targetAngle = idealAngle + Math.PI;
       else if (d > 320) targetAngle = idealAngle;
@@ -1810,9 +2181,9 @@ function update(dt, now) {
     e.facingLeft = p.x < e.x;
     if (e.hitFlash > 0) e.hitFlash -= dt * 6;
 
-    if (dist(e, p) < e.r + p.r) {
+    if (!stunned && dist(e, p) < e.r + p.r) {
       if (!p.shielded) {
-        p.hp -= e.boss ? 25 : 10;
+        p.hp -= (e.boss ? 25 : 10) * playerDamageMul();
         updateHud();
         onPlayerDamaged();
         spawnParticles(p.x, p.y, '#ff3d7f');
@@ -1822,6 +2193,14 @@ function update(dt, now) {
         if (p.hp <= 0) return gameOver();
       }
       e.hp = 0; // enemy also dies on contact
+    }
+
+    // Contact with a defender chews through its HP (rather than the enemy
+    // suiciding like it does against the player - defenders would trivialize
+    // swarms otherwise) and shoves the attacker back a little.
+    if (!stunned && defTarget && dist(e, defTarget) < e.r + defTarget.r) {
+      defTarget.hp -= 8 * dt;
+      applyKnockback(e, Math.atan2(e.y - defTarget.y, e.x - defTarget.x), 40);
     }
   });
 
@@ -1843,6 +2222,15 @@ function update(dt, now) {
     pr.life -= dt;
     if (insideObstacle(pr.x, pr.y)) pr.life = 0;
 
+    // Defenders soak enemy fire - a bolt that reaches one detonates on it
+    // instead of passing through toward the player.
+    if (state.defender && !state.defender.fleeing && pr.life > 0 && dist(pr, state.defender) < pr.r + state.defender.r) {
+      state.defender.hp -= pr.damage || 8;
+      spawnParticles(state.defender.x, state.defender.y, pr.color || '#8b5cf6');
+      pr.life = 0;
+      return;
+    }
+
     const directHit = pr.life > 0 && dist(pr, p) < pr.r + p.r;
     const grenadeDetonate = pr.kind === 'grenade' && pr.life <= 0;
     // A hazard-carrying bolt (toxic/acid) still leaves its cloud/puddle
@@ -1855,7 +2243,7 @@ function update(dt, now) {
     const inSplash = pr.splash ? dist(pr, p) < pr.splash + p.r : directHit;
     pr.life = 0;
     if (inSplash && !p.shielded) {
-      p.hp -= pr.damage || 8;
+      p.hp -= (pr.damage || 8) * playerDamageMul();
       updateHud();
       onPlayerDamaged();
       spawnParticles(p.x, p.y, pr.color || (pr.damage ? '#ff4d4d' : '#8b5cf6'));
@@ -1888,7 +2276,7 @@ function update(dt, now) {
   state.hazards = state.hazards.filter((hz) => {
     if (performance.now() > hz.expiresAt) return false;
     if (!p.shielded && dist(hz, p) < hz.r + p.r) {
-      p.hp -= hz.dps * dt;
+      p.hp -= hz.dps * dt * playerDamageMul();
       updateHud();
       if (Math.random() < 0.12) spawnParticles(p.x, p.y, hz.color || '#7cff3d');
       if (p.hp <= 0) hazardKilledPlayer = true;
@@ -1905,7 +2293,7 @@ function update(dt, now) {
     if (b.life > 0 && insideObstacle(b.x, b.y)) {
       b.life = 0;
       spawnParticles(b.x, b.y, '#8a8f9a');
-      if (b.explosive) explodeAt(b.x, b.y, 70, 2);
+      if (b.explosive) { b.detonated = true; explodeAt(b.x, b.y, b.splashR || 70, b.splashDmg || 2); }
     }
   });
 
@@ -1921,21 +2309,45 @@ function update(dt, now) {
         } else {
           b.life = 0;
         }
-        e.hp -= b.damage ?? 1;
+        e.hp -= (b.damage ?? 1) * enemyMarkMul(e);
         e.hitFlash = 1;
         spawnParticles(e.x, e.y, e.color);
         // Bosses are heavier - half the knockback impulse.
         applyKnockback(e, Math.atan2(b.vy, b.vx), (e.boss ? 100 : 200) * (b.knockbackMul || 1));
         if (e.boss) triggerHitstop(90);
         if (b.freeze) e.frozenUntil = performance.now() + 1200;
-        if (b.poison) { e.poisonUntil = performance.now() + 2500; e.poisonDps = 1.2; }
+        if (b.poison) {
+          // Venom drains hard and stacks: a fresh tag ticks 2 hp/s for 4s
+          // (enough to finish most light enemies on its own), and re-tagging
+          // an already-poisoned enemy deepens the drain up to 4 hp/s.
+          const stacking = e.poisonUntil && performance.now() < e.poisonUntil;
+          e.poisonDps = stacking ? Math.min(4, (e.poisonDps || 2) + 0.8) : 2;
+          e.poisonUntil = performance.now() + 4000;
+        }
         if (e.hp <= 0) {
           triggerShake(e.boss ? 8 : 2);
           triggerHitstop(60);
         }
-        if (b.explosive) explodeAt(b.x, b.y, 70, 2);
+        if (b.explosive) { b.detonated = true; explodeAt(b.x, b.y, b.splashR || 70, b.splashDmg || 2); }
       }
     });
+  });
+
+  // Planted mines - blow when an armed one is tripped by a live enemy, or
+  // when the fuse runs out (so a dodged mine still pays off eventually).
+  // explodeAt handles splash damage, knockback, shake, and the sniper-mark
+  // multiplier, exactly like rocket/grenade blasts.
+  state.mines = state.mines.filter((m) => {
+    const nowMs = performance.now();
+    if (nowMs >= m.expiresAt) {
+      explodeAt(m.x, m.y, 110, 3);
+      return false;
+    }
+    if (nowMs >= m.armAt && state.enemies.some((e) => e.hp > 0 && dist(m, e) < 30 + e.r)) {
+      explodeAt(m.x, m.y, 110, 3);
+      return false;
+    }
+    return true;
   });
 
   // Allies auto-fire at nearest enemy
@@ -1951,12 +2363,18 @@ function update(dt, now) {
   });
   state.allies = state.allies.filter((a) => a.expiresAt > nowMs);
 
+  // Defender summons - a parallel system to the follow-ally above; both can
+  // be on the field at once without touching each other's arrays or logic.
+  updateDefender(dt, now);
+
   // Cleanup dead enemies -> score
   const before = state.enemies.length;
   state.enemies = state.enemies.filter((e) => {
     if (e.hp > 0) return true;
     trySpawnSpeechBubble(e, pickLine(e.type, 'death'), { big: e.boss, borderColor: e.boss ? '#ff3d7f' : '#2c303a', duration: e.boss ? 2.5 : 1.8, enemyType: e.type, moment: 'death' });
-    state.score += e.score;
+    // Marked kills (sniper defender) pay out 1.5x score on top of the 1.5x
+    // damage taken - a reward for focusing what the defender called out.
+    state.score += enemyMarkMul(e) > 1 ? Math.round(e.score * 1.5) : e.score;
     state.killStreak += 1;
 
     // Boss kills always get a guaranteed line - a bigger, rarer payoff moment
@@ -2260,6 +2678,29 @@ function render() {
     ctx.restore();
   });
 
+  // Planted mines - steel discs with a red arming light that blinks faster
+  // as the fuse runs down. Drawn under the entities so enemies walk onto them.
+  state.mines.forEach((m) => {
+    const nowMs = performance.now();
+    const armed = nowMs >= m.armAt;
+    ctx.save();
+    ctx.fillStyle = '#3a3f4a';
+    ctx.beginPath();
+    ctx.ellipse(m.x, m.y + 3, 9, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#d8dee8';
+    ctx.beginPath();
+    ctx.arc(m.x, m.y, 7, 0, Math.PI * 2);
+    ctx.fill();
+    const fuseFrac = (m.expiresAt - nowMs) / 8000;
+    const blinkRate = fuseFrac < 0.25 ? 24 : 10;
+    if (armed && Math.sin(now * blinkRate) > 0) {
+      ctx.fillStyle = '#ff2e2e';
+      ctx.fillRect(m.x - 2, m.y - 2, 4, 4);
+    }
+    ctx.restore();
+  });
+
   // Allies (hover-bob + rotating turret)
   state.allies.forEach((a) => {
     const bob = Math.sin(now * 4 + a.bobSeed) * 3;
@@ -2270,6 +2711,21 @@ function render() {
       drawGun(ctx, a.x, a.y + bob, angle, '#38e8d4');
     }
   });
+
+  // Summoned defender (plus any predecessor still sprinting off-screen).
+  const drawDefenderSprite = (d) => {
+    const bob = Math.sin(now * 4 + d.bobSeed) * 3;
+    drawSprite(ctx, SPRITES['def_' + d.type], d.x, d.y + bob, 42, d.facingLeft);
+    if (!d.fleeing) {
+      const t = nearest(d, state.enemies);
+      if (t) {
+        d.facingLeft = t.x < d.x;
+        drawGun(ctx, d.x, d.y + bob, Math.atan2(t.y - (d.y + bob), t.x - d.x), DEFENDER_DEFS[d.type].color);
+      }
+    }
+  };
+  if (state.defender) drawDefenderSprite(state.defender);
+  state.fleeingDefenders.forEach(drawDefenderSprite);
 
   // Enemies (bob + facing + hit-flash + dasher telegraph pulse)
   state.enemies.forEach((e) => {
@@ -2311,6 +2767,34 @@ function render() {
       ctx.fillStyle = '#8fe0ff';
       ctx.beginPath();
       ctx.arc(e.x, e.y + bob, size * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    // Voltage-defender stun - pale yellow ring, distinct from the solid
+    // ice-blue freeze disc above.
+    if (e.stunnedUntil && performance.now() < e.stunnedUntil) {
+      ctx.save();
+      ctx.globalAlpha = 0.45 + 0.2 * Math.sin(now * 14);
+      ctx.strokeStyle = '#fff2a0';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y + bob, size * 0.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+    // Sniper-defender mark - pulsing violet chevron pointing down at the
+    // marked enemy for the mark's whole duration.
+    if (e.markedUntil && performance.now() < e.markedUntil) {
+      const pulse = 0.6 + 0.4 * Math.sin(now * 8);
+      ctx.save();
+      ctx.globalAlpha = pulse;
+      ctx.fillStyle = '#b44dff';
+      const my = e.y + bob - size / 2 - 24;
+      ctx.beginPath();
+      ctx.moveTo(e.x - 6, my - 8);
+      ctx.lineTo(e.x + 6, my - 8);
+      ctx.lineTo(e.x, my);
+      ctx.closePath();
       ctx.fill();
       ctx.restore();
     }
@@ -2358,6 +2842,24 @@ function render() {
     ctx.fillRect(b.x - b.vx * 0.012 - half / 2, b.y - b.vy * 0.012 - half / 2, half, half);
     ctx.globalAlpha = 1;
     ctx.fillRect(b.x - half, b.y - half, half * 2, half * 2);
+  });
+
+  // Voltage-defender chain lightning - short-lived jagged polylines from the
+  // defender through each chained enemy, jittered per-frame for electric feel.
+  state.voltArcs.forEach((a) => {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, 1 - a.age / 0.18);
+    ctx.strokeStyle = '#9dfbff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    a.segs.forEach(([sx, sy], i) => {
+      const jx = sx + (i === 0 ? 0 : (Math.random() - 0.5) * 6);
+      const jy = sy + (i === 0 ? 0 : (Math.random() - 0.5) * 6);
+      if (i === 0) ctx.moveTo(jx, jy);
+      else ctx.lineTo(jx, jy);
+    });
+    ctx.stroke();
+    ctx.restore();
   });
 
   // Electric beam
@@ -2440,6 +2942,14 @@ function render() {
     ctx.strokeStyle = 'rgba(56,232,212,0.7)';
     ctx.lineWidth = 3;
     ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 10, 0, Math.PI * 2); ctx.stroke();
+  }
+  // Gunner-defender damage-reduction aura - chartreuse ring at a wider
+  // radius than the cyan invulnerability shield, so the two never read as
+  // the same effect even when both are up at once.
+  if (performance.now() < (p.auraUntil || 0)) {
+    ctx.strokeStyle = 'rgba(208,255,61,0.55)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 16, 0, Math.PI * 2); ctx.stroke();
   }
   drawGun(ctx, p.x, p.y, p.gunAngle, p.shielded ? '#38e8d4' : '#F0B90B');
 
