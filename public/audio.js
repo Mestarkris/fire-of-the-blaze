@@ -52,11 +52,7 @@ const GameAudio = (() => {
   function toggleMute() {
     muted = !muted;
     if (masterGain) masterGain.gain.value = muted ? 0 : 0.9;
-    if (muted) {
-      if (currentVoiceNode) currentVoiceNode.pause();
-      currentVoiceNode = null;
-      voiceQueue = [];
-    }
+    if (muted) stopAllVoiceLines();
     return muted;
   }
 
@@ -248,6 +244,15 @@ const GameAudio = (() => {
     else voiceQueue.push({ url });
   }
 
+  // Hard-stops whatever's currently speaking and drops everything queued
+  // behind it - used on mute, game over, and quitting to menu so dialogue
+  // from a finished run can never bleed into the next screen or next game.
+  function stopAllVoiceLines() {
+    if (currentVoiceNode) currentVoiceNode.pause();
+    currentVoiceNode = null;
+    voiceQueue = [];
+  }
+
   // ---- background music ---------------------------------------------------
   // Driving 4-bar minor-key arpeggio loop (Am - F - C - G), scheduled ahead
   // of time per the standard Web Audio lookahead-scheduler pattern so timing
@@ -337,6 +342,7 @@ const GameAudio = (() => {
     stopFlameHiss,
     preloadVoiceLines,
     playVoiceLine,
+    stopAllVoiceLines,
   };
 })();
 

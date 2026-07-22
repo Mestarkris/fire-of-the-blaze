@@ -263,12 +263,20 @@ function fitBubbleFont(ctx, text, maxWidth, baseSize, minSize) {
 // (x, y) - the tip of the tail sits at (x, y). Fades via `alpha`. `big`
 // (enemy boss lines) gets a larger box; `borderColor` lets callers distinguish
 // enemy (gray), boss (magenta), and player (gold) bubbles independently.
-function drawSpeechBubble(ctx, x, y, text, alpha, { big = false, borderColor = '#2c303a' } = {}) {
+// fontSize/fontFamily can be pre-computed once (see trySpawnSpeechBubble in
+// game.js) and passed straight through, skipping fitBubbleFont's
+// ctx.measureText search - it produces the same result every call for a
+// given (text, big) pair, so there's no reason to redo it every frame.
+function drawSpeechBubble(ctx, x, y, text, alpha, { big = false, borderColor = '#2c303a', fontSize, fontFamily } = {}) {
   ctx.save();
-  const maxWidth = big ? 230 : 175;
-  const baseSize = big ? 12 : 9;
-  const minSize = big ? 8 : 6;
-  const { fontSize } = fitBubbleFont(ctx, text, maxWidth, baseSize, minSize);
+  if (fontSize && fontFamily) {
+    ctx.font = `${fontSize}px ${fontFamily}`;
+  } else {
+    const maxWidth = big ? 230 : 175;
+    const baseSize = big ? 12 : 9;
+    const minSize = big ? 8 : 6;
+    ({ fontSize, fontFamily } = fitBubbleFont(ctx, text, maxWidth, baseSize, minSize));
+  }
   const padX = 10, padY = 7;
   const textWidth = ctx.measureText(text).width;
   const boxW = textWidth + padX * 2;

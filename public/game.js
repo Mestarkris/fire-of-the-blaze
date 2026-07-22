@@ -5,6 +5,7 @@
 
 const loginScreen = document.getElementById('login-screen');
 const startScreen = document.getElementById('start-screen');
+const howtoScreen = document.getElementById('howto-screen');
 const gameScreen = document.getElementById('game-screen');
 const gameOverScreen = document.getElementById('gameover-screen');
 const pauseScreen = document.getElementById('pause-screen');
@@ -54,7 +55,24 @@ function goFullscreenOnMobile() {
 document.addEventListener('fullscreenchange', resizeCanvas);
 document.addEventListener('webkitfullscreenchange', resizeCanvas);
 
+// The controls/chat-effects explainer is shown once, the first time a
+// session presses Play - every later restart (from game over, or the pause
+// menu) skips straight into a fresh run.
+let hasSeenHowToPlay = false;
+
 document.getElementById('play-btn').addEventListener('click', () => {
+  if (hasSeenHowToPlay) {
+    goFullscreenOnMobile();
+    startGame();
+    return;
+  }
+  startScreen.classList.add('hidden');
+  howtoScreen.classList.remove('hidden');
+});
+
+document.getElementById('howto-start-btn').addEventListener('click', () => {
+  hasSeenHowToPlay = true;
+  howtoScreen.classList.add('hidden');
   goFullscreenOnMobile();
   startGame();
 });
@@ -159,6 +177,12 @@ const PICKUP_WEAPON_TYPES = ['spread', 'rapid', 'electric', 'ricochet', 'shotgun
 const WEAPON_DURATION_MS = 15000;
 
 const WAVE_DURATION = 30;
+// Hard ceiling on concurrent enemies - see the guard at the top of
+// spawnEnemy(). Generous relative to normal play (typical fights run well
+// under this) but stops a chat-spam burst (a pile of !spawn messages, a huge
+// vote horde, chained boss waves) from growing state.enemies without bound
+// and tanking the frame rate.
+const MAX_ENEMIES = 60;
 
 function currentSpawnInterval() {
   let base = Math.max(0.7, 2.2 - (state.wave - 1) * 0.12);
@@ -246,6 +270,8 @@ function resetState() {
   state.paused = false;
   pauseScreen.classList.add('hidden');
   document.getElementById('pause-btn').innerHTML = '&#9208;';
+  // Make sure no leftover dialogue from a previous run bleeds into this one.
+  GameAudio.stopAllVoiceLines();
   state.player = { x: canvas.width / 2, y: canvas.height / 2, r: 16, hp: 100, maxHp: 100, speed: 260, shielded: false, shieldUntil: 0, facingLeft: false, kx: 0, ky: 0, vx: 0, vy: 0, gunAngle: 0, dotUntil: 0, dotDps: 0, chillUntil: 0, chillMul: 1 };
   state.bullets = [];
   state.enemyProjectiles = [];
@@ -323,6 +349,15 @@ function quitToMenu() {
   state.paused = false;
   GameAudio.stopBeamHum();
   GameAudio.stopFlameHiss();
+  GameAudio.stopAllVoiceLines();
+  // Nothing is watching the arena anymore - drop the live Blaze connection
+  // instead of leaving chat events free to keep mutating hidden game state
+  // (and an idle Blaze events subscription alive) until the player starts a
+  // new game and connectBlazeSocket() silently replaces it.
+  if (blazeSocket) {
+    blazeSocket.disconnect();
+    blazeSocket = null;
+  }
   pauseScreen.classList.add('hidden');
   gameScreen.classList.add('hidden');
   showStartScreen();
@@ -331,6 +366,11 @@ function quitToMenu() {
 document.getElementById('pause-btn').addEventListener('click', togglePause);
 document.getElementById('resume-btn').addEventListener('click', togglePause);
 document.getElementById('quit-btn').addEventListener('click', quitToMenu);
+// resetState() (called at the top of startGame()) already unpauses and
+// hides the pause overlay, so restarting from the pause menu is just
+// startGame() - identical to the "Run it back" button on the game-over screen.
+document.getElementById('pause-restart-btn').addEventListener('click', startGame);
+document.getElementById('pause-mute-btn').addEventListener('click', () => updateMuteButtons(GameAudio.toggleMute()));
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' || e.key.toLowerCase() === 'p') togglePause();
 });
@@ -609,7 +649,10 @@ function isDangerWave(wave) {
 // the game keeps escalating deep into a run instead of plateauing once every
 // enemy type has unlocked.
 function hardModeMultiplier(wave) {
-  return wave >= 10 ? 1 + (wave - 9) * 0.09 : 1;
+  // Capped at 3x so this flattens out (~wave 31) instead of climbing forever
+  // - weapon damage doesn't scale with wave, so an uncapped multiplier would
+  // eventually make late waves mathematically unkillable, not just harder.
+  return wave >= 10 ? Math.min(3, 1 + (wave - 9) * 0.09) : 1;
 }
 
 const ENEMY_ARCHETYPES = {
@@ -835,6 +878,15 @@ function trySpawnSpeechBubble(entity, text, opts = {}) {
   if (state.speechBubbles.length >= MAX_SPEECH_BUBBLES) return false;
   if (nowMs - lastSpeechBubbleAt < SPEECH_BUBBLE_STAGGER_MS) return false;
   lastSpeechBubbleAt = nowMs;
+
+  // A bubble's font size never changes for its whole lifetime, so compute
+  // the fit once here rather than every render() frame - fitBubbleFont does
+  // a ctx.measureText search that isn't free to repeat 60x/sec per bubble.
+  const maxWidth = opts.big ? 230 : 175;
+  const baseSize = opts.big ? 12 : 9;
+  const minSize = opts.big ? 8 : 6;
+  const { fontSize, fontFamily } = fitBubbleFont(ctx, text, maxWidth, baseSize, minSize);
+
   state.speechBubbles.push({
     follow: entity,
     text,
@@ -843,6 +895,8 @@ function trySpawnSpeechBubble(entity, text, opts = {}) {
     big: !!opts.big,
     borderColor: opts.borderColor || '#2c303a',
     isPlayer: !!opts.isPlayer,
+    fontSize,
+    fontFamily,
   });
 
   // Every character speaks its line via a pre-generated ElevenLabs audio file.
@@ -872,6 +926,11 @@ function onPlayerDamaged() {
 }
 
 function spawnEnemy(boss = false, forcedType = null) {
+  // Every spawn path (passive timer, chat commands, votes, boss packs,
+  // swarmer clusters) funnels through this one function, so gating here is
+  // enough to enforce MAX_ENEMIES everywhere at once.
+  if (state.enemies.length >= MAX_ENEMIES) return;
+
   const edge = Math.floor(Math.random() * 4);
   let x, y;
   if (edge === 0) { x = -30; y = Math.random() * canvas.height; }
@@ -881,7 +940,9 @@ function spawnEnemy(boss = false, forcedType = null) {
 
   const type = boss ? 'boss' : (forcedType || pickEnemyType());
   const def = ENEMY_ARCHETYPES[type];
-  const waveSpeedMul = 1 + (state.wave - 1) * 0.04;
+  // Capped so a long run doesn't eventually make every enemy literally
+  // faster than the player can react to - growth flattens out around wave 21.
+  const waveSpeedMul = Math.min(1.8, 1 + (state.wave - 1) * 0.04);
   // Danger waves buff regular wave enemies (not bosses, and not tip-reward
   // loot enemies) so the fewer spawns that do come in hit noticeably harder.
   const dangerBuffed = !boss && type !== 'loot' && isDangerWave(state.wave);
@@ -933,7 +994,11 @@ function spawnSwarmerCluster() {
 
   const count = 3 + Math.floor(Math.random() * 2);
   for (let i = 0; i < count; i++) {
+    const before = state.enemies.length;
     spawnEnemy(false, 'swarmer');
+    // spawnEnemy() no-ops once MAX_ENEMIES is hit - bail rather than
+    // reposition whatever unrelated enemy happens to be last in the array.
+    if (state.enemies.length === before) break;
     const e = state.enemies[state.enemies.length - 1];
     e.x = baseX + (Math.random() - 0.5) * 40;
     e.y = baseY + (Math.random() - 0.5) * 40;
@@ -1229,18 +1294,50 @@ function update(dt, now) {
     state.shake.y = 0;
   }
 
-  // Hitstop: freeze all movement/collision/AI for a few real milliseconds on
-  // an impactful hit. Input keeps being captured by the listeners above (they
+  // Shield visibility is derived from shieldUntil every frame (see
+  // applyShield) so the chat command and the Shift ability can coexist.
+  p.shielded = now < p.shieldUntil;
+  updateShieldHud();
+
+  // The run's "story clock" - wave timer, wave-transition banner, background
+  // tier cross-fade, and health-pickup scheduling - keeps advancing through a
+  // hitstop freeze-frame. Only the physics/AI/combat-resolution below this
+  // point actually pauses, so a flurry of kills (each triggering hitstop)
+  // can't silently stretch out a wave's real duration.
+  state.waveTime += dt;
+  if (state.waveTime >= WAVE_DURATION) {
+    advanceWave();
+  }
+  if (state.waveBanner.active) {
+    state.waveBanner.elapsed += dt;
+    if (state.waveBanner.elapsed >= state.waveBanner.duration) state.waveBanner.active = false;
+  }
+  if (state.bgTransition) {
+    state.bgTransition.elapsed += dt;
+    if (state.bgTransition.elapsed >= state.bgTransition.duration) state.bgTransition = null;
+  }
+  state.healthSchedule.forEach((entry) => {
+    if (!entry.spawned && state.waveTime >= entry.time) {
+      entry.spawned = true;
+      spawnHealthPickup();
+    }
+  });
+
+  // Speech bubbles are a cosmetic timer, not physics, so they age out even
+  // through a hitstop freeze (their matching voice line keeps playing in
+  // real time regardless). A bubble whose entity has since died just stops
+  // moving - nothing mutates its x/y anymore - which is exactly the
+  // "freeze in place" look we want once the entity's gone.
+  state.speechBubbles.forEach((b) => { b.age += dt; });
+  state.speechBubbles = state.speechBubbles.filter((b) => b.age < b.duration);
+
+  // Hitstop: freeze movement/collision/AI for a few real milliseconds on an
+  // impactful hit. Input keeps being captured by the listeners above (they
   // run independently of update()); render() still runs every frame via loop().
   if (state.hitstop > 0) {
     state.hitstop -= dt * 1000;
     return;
   }
-
-  // Shield visibility is derived from shieldUntil every frame (see
-  // applyShield) so the chat command and the Shift ability can coexist.
-  p.shielded = now < p.shieldUntil;
-  updateShieldHud();
 
   // Elemental status effects from elite enemy attacks/hazard zones - dot
   // ticks damage over time (fire/poison), chill saps top speed (ice).
@@ -1273,15 +1370,15 @@ function update(dt, now) {
   const moving = moveX !== 0 || moveY !== 0;
   if (moving) state.lastMoveAngle = Math.atan2(moveY, moveX);
 
-  // NOTE: accel/friction exaggerated for testing visibility per request - dial
-  // back toward accel ~1800 / friction ~0.85 once the effect is confirmed.
-  const accel = 3000;
+  // Momentum-based movement - accelerate toward input direction, cap at top
+  // speed, and slide to a stop via friction when there's no input.
+  const accel = 1800;
   if (moving) {
     p.vx += moveX * accel * dt;
     p.vy += moveY * accel * dt;
   } else {
-    p.vx *= 0.92;
-    p.vy *= 0.92;
+    p.vx *= 0.85;
+    p.vy *= 0.85;
     if (Math.abs(p.vx) < 1) p.vx = 0;
     if (Math.abs(p.vy) < 1) p.vy = 0;
   }
@@ -1433,25 +1530,9 @@ function update(dt, now) {
   });
   state.bullets = state.bullets.filter((b) => b.life > 0);
 
-  // Wave progression
-  state.waveTime += dt;
-  if (state.waveTime >= WAVE_DURATION) {
-    advanceWave();
-  }
-  if (state.waveBanner.active) {
-    state.waveBanner.elapsed += dt;
-    if (state.waveBanner.elapsed >= state.waveBanner.duration) state.waveBanner.active = false;
-  }
-  if (state.bgTransition) {
-    state.bgTransition.elapsed += dt;
-    if (state.bgTransition.elapsed >= state.bgTransition.duration) state.bgTransition = null;
-  }
-  state.healthSchedule.forEach((entry) => {
-    if (!entry.spawned && state.waveTime >= entry.time) {
-      entry.spawned = true;
-      spawnHealthPickup();
-    }
-  });
+  // Health pickups - collection/expiry check. Scheduling (when a pickup is
+  // due to appear) happens above, ungated; this is collision resolution, so
+  // it stays gated behind hitstop like everything else in this section.
   state.healthPickups = state.healthPickups.filter((h) => {
     if (performance.now() > h.expiresAt) return false;
     if (dist(h, p) < p.r + 12) {
@@ -1593,7 +1674,8 @@ function update(dt, now) {
         });
       }
     } else {
-      // chaser, swarmer, boss - direct homing chase.
+      // chaser, swarmer, boss, grunt, loot - any type without a dedicated
+      // branch above falls through to this default: direct homing chase.
       if (e.heading === undefined) e.heading = idealAngle;
       e.heading = lerpAngle(e.heading, idealAngle, dt * (e.boss ? 2.5 : 4.5));
       e.x += Math.cos(e.heading) * e.speed * speedMul * dt;
@@ -1679,16 +1761,21 @@ function update(dt, now) {
   // Ground hazard zones left by toxic/plague/acid attacks - tick damage into
   // the player while they stand inside, same shield-blocks-everything rule
   // as every other damage source.
+  let hazardKilledPlayer = false;
   state.hazards = state.hazards.filter((hz) => {
     if (performance.now() > hz.expiresAt) return false;
     if (!p.shielded && dist(hz, p) < hz.r + p.r) {
       p.hp -= hz.dps * dt;
       updateHud();
       if (Math.random() < 0.12) spawnParticles(p.x, p.y, hz.color || '#7cff3d');
-      if (p.hp <= 0) gameOver();
+      if (p.hp <= 0) hazardKilledPlayer = true;
     }
     return true;
   });
+  // Bail out immediately, same as the other two death paths above, so a
+  // fatal hazard tick can't also take a bullet/contact hit later in this
+  // same frame and process more damage against an already-dead player.
+  if (hazardKilledPlayer) return gameOver();
 
   // Bullets vs obstacles
   state.bullets.forEach((b) => {
@@ -1768,12 +1855,6 @@ function update(dt, now) {
   // Particles
   state.particles.forEach((pt) => { pt.life -= dt; pt.x += pt.vx * dt; pt.y += pt.vy * dt; });
   state.particles = state.particles.filter((pt) => pt.life > 0);
-
-  // Speech bubbles - age out and disappear; a bubble whose entity has died
-  // and left state.enemies just stops moving (nothing mutates its x/y
-  // anymore), which is exactly the "freeze in place" behavior we want.
-  state.speechBubbles.forEach((b) => { b.age += dt; });
-  state.speechBubbles = state.speechBubbles.filter((b) => b.age < b.duration);
 }
 
 function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
@@ -2226,7 +2307,7 @@ function render() {
     const alpha = t < 0.6 ? 1 : Math.max(0, 1 - (t - 0.6) / 0.4);
     const floatUp = 10 * Math.min(1, t / 0.4) + 6 * t;
     const headR = b.follow.r || 16;
-    drawSpeechBubble(ctx, b.follow.x, b.follow.y - headR - 10 - floatUp, b.text, alpha, { big: b.big, borderColor: b.borderColor });
+    drawSpeechBubble(ctx, b.follow.x, b.follow.y - headR - 10 - floatUp, b.text, alpha, { big: b.big, borderColor: b.borderColor, fontSize: b.fontSize, fontFamily: b.fontFamily });
   });
 
   ctx.restore();
@@ -2264,6 +2345,7 @@ async function gameOver() {
   state.running = false;
   GameAudio.stopBeamHum();
   GameAudio.stopFlameHiss();
+  GameAudio.stopAllVoiceLines();
   GameAudio.playGameOver();
   gameScreen.classList.add('hidden');
   gameOverScreen.classList.remove('hidden');
@@ -2295,7 +2377,11 @@ function renderLeaderboard(entries) {
 
 document.getElementById('restart-btn').addEventListener('click', startGame);
 
-document.getElementById('mute-btn').addEventListener('click', (e) => {
-  const muted = GameAudio.toggleMute();
-  e.currentTarget.innerHTML = muted ? '&#128263;' : '&#128266;';
-});
+// Shared by the HUD mute button and the pause-menu mute button so either one
+// toggling sound keeps both in sync, regardless of which was clicked.
+function updateMuteButtons(muted) {
+  document.getElementById('mute-btn').innerHTML = muted ? '&#128263;' : '&#128266;';
+  document.getElementById('pause-mute-btn').textContent = muted ? 'Unmute Sound' : 'Mute Sound';
+}
+
+document.getElementById('mute-btn').addEventListener('click', () => updateMuteButtons(GameAudio.toggleMute()));
