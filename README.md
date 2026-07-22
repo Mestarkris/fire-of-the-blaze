@@ -21,14 +21,18 @@ Most stream-integrated games treat chat as a sidebar — a feed to glance at whi
   | `!heal` in chat | restores 20 HP |
   | `!shield` in chat | 3 seconds of invincibility |
   | `!slow` in chat | slows every enemy for 5 seconds |
+  | `!taunt <text>` in chat | that viewer's own words appear as a living enemy's speech bubble |
   | any other chat message | scrolls through the on-screen event ticker |
   | `channel.follow` | spawns a temporary ally that auto-fires at the nearest enemy for 10s |
-  | `channel.subscribe` / gift sub | triggers a boss wave |
+  | `channel.subscribe` | triggers a boss wave, named after the subscriber |
+  | `channel.subscription.gift` | triggers a boss wave named after the gifter, with HP scaled to the gift count |
   | `channel.vote` | summons a horde sized to the vote amount (1 enemy per 5 votes, capped at 12) |
   | `channel.thanks` (tip), small | spawns a one-hit-kill "loot" enemy worth a big score bonus |
   | `channel.thanks` (tip), medium | unlocks the electric weapon for 15 seconds |
-  | `channel.thanks` (tip), large | MEGA TIP banner + an immediate boss wave |
+  | `channel.thanks` (tip), large | MEGA TIP banner + a named boss wave, with HP scaled to the tip size |
 - **Leaderboard** — persisted to `leaderboard.json` on the server, tied to the player's real Blaze display name and avatar; top 10 shown after every run.
+- **Help vs Chaos tension meter** — every chat-driven effect nudges a rolling HUD gauge toward "help" (heals, shields, allies, weapon unlocks) or "chaos" (spawns, hordes, boss waves), decaying back toward neutral over time. Sustained chaos gives newly spawned enemies a small speed edge; sustained help gives the player a small damage boost — the community's recent mood has a small but real effect on the run, not just individual commands in isolation.
+- **Named raid bosses** — a sub, gift-sub bomb, or large tip doesn't just spawn a generic boss: the boss carries that viewer's name as a persistent title tag for as long as it's alive, and its HP scales up with gift count / tip size, so a big gift bomb or mega tip reads as a genuinely tougher, personally-attributed threat rather than the same fixed boss pack every time.
 
 ### Wave & difficulty progression
 
@@ -113,4 +117,5 @@ Open <http://localhost:3000>, click **Log in with Blaze**, approve access, and y
 - Single active game session per login (no multiplayer arena).
 - Leaderboard is a local JSON file on the server — fine for a demo, not for a real launch.
 - Enemy voice audio is pre-generated per line (via `scripts/generate-voices.js`, run manually offline) rather than synthesized live.
+- `!taunt` has light moderation (a per-viewer cooldown, length cap, URL stripping, and a small blocklist) but is a best-effort filter, not a substitute for real chat moderation upstream on Blaze.
 - Requested OAuth scopes are kept minimal (`users.read`, `offline.access`) — the game only reads identity and chat activity, it doesn't post or moderate anything on your behalf.

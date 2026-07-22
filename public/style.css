@@ -470,6 +470,47 @@ html, body {
 .shield-pill.ready { border-color: var(--cyan); color: var(--cyan); }
 .shield-pill.cooldown { border-color: #2c303a; color: var(--muted); }
 
+.tension-pill {
+  left: auto;
+  right: 26px;
+  top: 180px;
+  transform: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+
+.tension-label { color: var(--muted); }
+
+.tension-track {
+  width: 60px;
+  height: 5px;
+  background: linear-gradient(90deg, var(--cyan), #2c303a 50%, var(--magenta));
+  border-radius: 3px;
+  position: relative;
+}
+
+/* A small needle sliding along the help<->chaos gradient track - positioned
+   by `left` (0% = cyan/help end, 100% = magenta/chaos end), not by width,
+   so it reads as a single clear position rather than a fill amount. */
+.tension-fill {
+  position: absolute;
+  top: -2px;
+  left: 50%;
+  width: 3px;
+  height: 9px;
+  background: var(--text);
+  border-radius: 1px;
+  transform: translateX(-50%);
+  transition: left 0.2s linear;
+}
+
+.tension-pill.leaning-help .tension-label:first-child { color: var(--cyan); }
+.tension-pill.leaning-chaos .tension-label:last-child { color: var(--magenta); }
+
 /* ---------- Mobile touch controls ---------- */
 
 .mobile-controls {

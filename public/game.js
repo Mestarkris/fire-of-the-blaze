@@ -128,10 +128,45 @@ const state = {
   joystick: { active: false, dx: 0, dy: 0 },
   speechBubbles: [],
   killStreak: 0,
+  // 0 = chat has recently been all-helpful, 1 = all-chaotic, 0.5 = neutral.
+  // See nudgeTension()/updateTensionEffects() for how this is driven and
+  // what it does to the run.
+  tension: 0.5,
 };
 
 const SHIELD_ABILITY_DURATION = 2000;
 const SHIELD_ABILITY_COOLDOWN = 12000;
+
+// ---------------------------------------------------------------------------
+// Help vs Chaos tension - a rolling read on whether chat has recently been
+// leaning helpful (heals/shields/allies) or chaotic (spawns/hordes/boss
+// waves). Sustained chaos gives newly spawned enemies a small speed buff;
+// sustained help gives the player a small damage buff. Nothing changes near
+// the middle - this is meant to be felt over a stretch of chat activity, not
+// swing on a single command. See handleBlazeEvent for what nudges it and
+// which direction, and update()'s "story clock" section for the decay back
+// toward neutral.
+const TENSION_CHAOS_THRESHOLD = 0.7;
+const TENSION_HELP_THRESHOLD = 0.3;
+const TENSION_MAX_BONUS = 0.15; // +/-15% at full tilt
+
+function nudgeTension(amount) {
+  state.tension = Math.max(0, Math.min(1, state.tension + amount));
+}
+
+// Derived multipliers read by spawnEnemy() (enemy speed) and the shooting
+// code (player damage) - flat 1 in the neutral middle band, scaling linearly
+// out to TENSION_MAX_BONUS at the extremes.
+function tensionEnemySpeedMul() {
+  if (state.tension <= TENSION_CHAOS_THRESHOLD) return 1;
+  const t = (state.tension - TENSION_CHAOS_THRESHOLD) / (1 - TENSION_CHAOS_THRESHOLD);
+  return 1 + t * TENSION_MAX_BONUS;
+}
+function tensionPlayerDamageMul() {
+  if (state.tension >= TENSION_HELP_THRESHOLD) return 1;
+  const t = (TENSION_HELP_THRESHOLD - state.tension) / TENSION_HELP_THRESHOLD;
+  return 1 + t * TENSION_MAX_BONUS;
+}
 
 // Small blocky pixel-heart icon for health pickups - a different silhouette
 // from the weapon diamonds so the two pickup types are distinguishable at a
@@ -306,8 +341,10 @@ function resetState() {
   state.joystick = { active: false, dx: 0, dy: 0 };
   state.speechBubbles = [];
   state.killStreak = 0;
+  state.tension = 0.5;
   lastLineIndex = {};
   lastSpeechBubbleAt = 0;
+  lastTauntBySender = {};
   seedObstacles();
   updateHud();
 }
@@ -513,16 +550,20 @@ function handleBlazeEvent(type, payload) {
       if (text.startsWith('!spawn')) {
         spawnEnemy();
         pushTicker(name, 'threw in another enemy', true);
+        nudgeTension(0.05);
       } else if (text.startsWith('!heal')) {
         state.player.hp = Math.min(state.player.maxHp, state.player.hp + 20);
         pushTicker(name, 'healed you +20 HP', true);
         updateHud();
+        nudgeTension(-0.06);
       } else if (text.startsWith('!shield')) {
         applyShield(3000);
         pushTicker(name, 'granted 3s shield', true);
+        nudgeTension(-0.05);
       } else if (text.startsWith('!slow')) {
         state.slowUntil = performance.now() + 5000;
         pushTicker(name, 'slowed every enemy', true);
+        nudgeTension(-0.05);
       } else if (text.startsWith('!testtip')) {
         // TEST-ONLY DEBUG SHORTCUT: simulates a channel.thanks (tip) event
         // locally, since real on-chain tips are hard to trigger on demand
@@ -530,6 +571,8 @@ function handleBlazeEvent(type, payload) {
         // real public launch so viewers can't fake tip tiers for free.
         const amount = Number(text.split(' ')[1]) || 25;
         handleTip(name, amount);
+      } else if (text.startsWith('!taunt')) {
+        handleTaunt(name, (payload.message || '').trim().replace(/^!taunt\s*/i, ''));
       } else {
         pushTicker(name, payload.message);
       }
@@ -545,18 +588,25 @@ function handleBlazeEvent(type, payload) {
       const name = payload.follower?.displayName || 'a new viewer';
       spawnAlly();
       pushTicker(name, 'followed - ally deployed!', true);
+      nudgeTension(-0.08);
       break;
     }
     case 'channel.subscribe': {
       const name = payload.subscriber?.displayName || 'a viewer';
-      triggerBossWave();
+      triggerBossWave(name);
       pushTicker(name, 'subscribed - boss wave incoming!', true);
+      nudgeTension(0.15);
       break;
     }
     case 'channel.subscription.gift': {
       const name = payload.sender?.displayName || 'a viewer';
-      triggerBossWave();
+      const giftCount = payload.giftCount || 1;
+      // More gifted subs = a genuinely tougher named boss, not just the same
+      // fixed boss pack regardless of how big the gift bomb was.
+      const hpMul = 1 + Math.min(2, (giftCount - 1) * 0.15);
+      triggerBossWave(name, hpMul);
       pushTicker(name, `gifted ${payload.giftCount || ''} subs - boss wave!`, true);
+      nudgeTension(0.15 + Math.min(0.15, giftCount * 0.01));
       break;
     }
     case 'channel.vote': {
@@ -566,6 +616,7 @@ function handleBlazeEvent(type, payload) {
       for (let i = 0; i < count; i++) spawnEnemy();
       triggerShake(6 + count);
       pushTicker(name, `voted ${amount} - horde of ${count} summoned`, true);
+      nudgeTension(Math.min(0.15, count * 0.02));
       break;
     }
   }
@@ -580,17 +631,63 @@ const TIP_TIER_LARGE = 200;
 
 function handleTip(name, amount) {
   if (amount >= TIP_TIER_LARGE) {
-    triggerBossWave();
+    // Bigger tip above the large threshold = a tougher named boss, capped at
+    // 3x so a truly huge tip doesn't spawn something unkillable.
+    const hpMul = 1 + Math.min(2, (amount - TIP_TIER_LARGE) / 500);
+    triggerBossWave(name, hpMul);
     state.waveBanner = { text: `MEGA TIP - ${name}!`, elapsed: 0, duration: 2.6, active: true };
     pushTicker(name, `tipped ${amount} - MEGA TIP! Boss wave!`, true);
+    nudgeTension(0.2);
   } else if (amount >= TIP_TIER_MEDIUM) {
     state.weapon = 'electric';
     state.weaponUntil = performance.now() + WEAPON_DURATION_MS;
     pushTicker(name, `tipped ${amount} - electric gun unlocked for 15s!`, true);
+    nudgeTension(-0.08);
   } else {
     spawnEnemy(false, 'loot');
     pushTicker(name, `tipped ${amount} - bonus loot enemy incoming!`, true);
+    nudgeTension(-0.04);
   }
+}
+
+// ---------------------------------------------------------------------------
+// !taunt <text> - injects real viewer-written text into a living enemy's
+// speech bubble instead of only picking from the pre-written DIALOGUE pool.
+// This is the one piece of genuinely user-generated content that ends up
+// physically in the game world, so it gets its own light moderation layer:
+// a per-sender cooldown (so one person can't flood the shared speech-bubble
+// queue), a length cap, URL stripping, and a small best-effort blocklist.
+// None of this is a substitute for real chat moderation - Blaze mods can
+// already timeout/ban abusive users upstream - it's just enough to keep
+// obviously inappropriate text from being physically drawn into the arena.
+// ---------------------------------------------------------------------------
+const TAUNT_COOLDOWN_MS = 15000;
+const TAUNT_MAX_LEN = 60;
+let lastTauntBySender = {};
+const TAUNT_BLOCKLIST = [
+  'fuck', 'shit', 'bitch', 'cunt', 'nigger', 'nigga', 'faggot', 'retard',
+  'rape', 'kys', 'kill yourself',
+];
+
+function handleTaunt(name, rawText) {
+  const now = performance.now();
+  if (now - (lastTauntBySender[name] || 0) < TAUNT_COOLDOWN_MS) return;
+
+  let text = rawText.replace(/https?:\/\/\S+/gi, '').replace(/\s+/g, ' ').trim();
+  if (!text) return;
+  if (text.length > TAUNT_MAX_LEN) text = text.slice(0, TAUNT_MAX_LEN - 1) + '…';
+
+  const lower = text.toLowerCase();
+  if (TAUNT_BLOCKLIST.some((w) => lower.includes(w))) return;
+
+  const target = nearest(state.player, state.enemies.filter((e) => e.hp > 0));
+  if (!target) return;
+
+  lastTauntBySender[name] = now;
+  // No pre-generated voice file exists for arbitrary chat text (see
+  // scripts/generate-voices.js - it only covers the fixed DIALOGUE/
+  // PLAYER_LINES pool), so this bubble is intentionally text-only.
+  trySpawnSpeechBubble(target, `${name}: "${text}"`, { duration: 2.6, borderColor: '#38e8d4' });
 }
 
 function pushTicker(name, text, isEffect = false) {
@@ -925,7 +1022,7 @@ function onPlayerDamaged() {
   GameAudio.playPlayerHit();
 }
 
-function spawnEnemy(boss = false, forcedType = null) {
+function spawnEnemy(boss = false, forcedType = null, extra = {}) {
   // Every spawn path (passive timer, chat commands, votes, boss packs,
   // swarmer clusters) funnels through this one function, so gating here is
   // enough to enforce MAX_ENEMIES everywhere at once.
@@ -949,8 +1046,13 @@ function spawnEnemy(boss = false, forcedType = null) {
   // The wave-10+ hard-mode ramp applies to everything except loot (loot is a
   // tip reward and should stay a guaranteed one-hit kill).
   const hardMul = type === 'loot' ? 1 : hardModeMultiplier(state.wave);
-  const hpMul = (dangerBuffed ? 1.6 : 1) * hardMul;
-  const speedBuffMul = (dangerBuffed ? 1.15 : 1) * Math.min(1.3, hardMul);
+  const hpMul = (dangerBuffed ? 1.6 : 1) * hardMul * (extra.hpMul || 1);
+  // Sustained "chaos" chat activity gives freshly spawned enemies a small
+  // speed edge (see nudgeTension in handleBlazeEvent) - baked in at spawn
+  // time like every other speed multiplier here, so it reflects the mood
+  // chat was in when this enemy arrived rather than live-updating existing
+  // enemies mid-fight.
+  const speedBuffMul = (dangerBuffed ? 1.15 : 1) * Math.min(1.3, hardMul) * tensionEnemySpeedMul();
   const speed = (def.speedRange[0] + Math.random() * (def.speedRange[1] - def.speedRange[0])) * waveSpeedMul * speedBuffMul;
 
   state.enemies.push({
@@ -968,6 +1070,10 @@ function spawnEnemy(boss = false, forcedType = null) {
     hitFlash: 0,
     kx: 0,
     ky: 0,
+    // Set when this boss was summoned by a specific viewer's sub/gift/mega
+    // tip (see triggerBossWave) - rendered as a persistent name tag above
+    // the boss for as long as it's alive (see render()).
+    sponsorName: extra.sponsorName || null,
     // sniper / brute
     strafeDir: Math.random() < 0.5 ? 1 : -1,
     fireCooldown: 1 + Math.random(),
@@ -1005,8 +1111,11 @@ function spawnSwarmerCluster() {
   }
 }
 
-function triggerBossWave() {
-  spawnEnemy(true);
+// sponsorName/hpMul let a specific viewer's sub, gift bomb, or mega tip
+// "own" the boss it summons - see the channel.subscribe / .gift / handleTip
+// call sites for how hpMul scales with gift count or tip size.
+function triggerBossWave(sponsorName = null, hpMul = 1) {
+  spawnEnemy(true, null, { sponsorName, hpMul });
   for (let i = 0; i < 3; i++) spawnEnemy();
   triggerShake(10);
 }
@@ -1078,7 +1187,7 @@ function updateElectricBeam(dt) {
     state.beamCooldown -= dt;
     if (state.beamCooldown <= 0) {
       state.beamCooldown = 0.06;
-      best.hp -= WEAPON_DEFS.electric.damage;
+      best.hp -= WEAPON_DEFS.electric.damage * tensionPlayerDamageMul();
       best.hitFlash = 1;
       spawnParticles(best.x, best.y, '#4dd8ff');
       if (best.hp <= 0) {
@@ -1118,7 +1227,7 @@ function updateFlamethrower(dt) {
       let diff = Math.abs(angTo - angle);
       if (diff > Math.PI) diff = Math.PI * 2 - diff;
       if (diff > halfAngle) return;
-      e.hp -= WEAPON_DEFS.flamethrower.damage;
+      e.hp -= WEAPON_DEFS.flamethrower.damage * tensionPlayerDamageMul();
       e.hitFlash = 1;
       spawnParticles(e.x, e.y, '#ff9d3d');
       applyKnockback(e, angTo, 20);
@@ -1195,6 +1304,15 @@ function updateShieldHud() {
     shieldBtn.classList.toggle('ready', ready);
     shieldBtn.classList.toggle('cooldown', !ready);
   }
+}
+
+function updateTensionHud() {
+  const fill = document.getElementById('tension-fill');
+  // 0 -> needle at the cyan/help end, 1 -> needle at the magenta/chaos end.
+  fill.style.left = (state.tension * 100) + '%';
+  const badge = document.getElementById('tension-badge');
+  badge.classList.toggle('leaning-chaos', state.tension > TENSION_CHAOS_THRESHOLD);
+  badge.classList.toggle('leaning-help', state.tension < TENSION_HELP_THRESHOLD);
 }
 
 // ---------------------------------------------------------------------------
@@ -1331,6 +1449,11 @@ function update(dt, now) {
   state.speechBubbles.forEach((b) => { b.age += dt; });
   state.speechBubbles = state.speechBubbles.filter((b) => b.age < b.duration);
 
+  // Tension drifts back toward neutral over time so the meter reflects
+  // recent chat mood, not a permanent all-run drift toward one edge.
+  state.tension += (0.5 - state.tension) * Math.min(1, dt * 0.06);
+  updateTensionHud();
+
   // Hitstop: freeze movement/collision/AI for a few real milliseconds on an
   // impactful hit. Input keeps being captured by the listeners above (they
   // run independently of update()); render() still runs every frame via loop().
@@ -1438,7 +1561,7 @@ function update(dt, now) {
           const a = angle + offset;
           state.bullets.push({
             x: p.x, y: p.y, vx: Math.cos(a) * 620, vy: Math.sin(a) * 620,
-            r: 4, life: 1.2, damage: weaponDef.damage, color: weaponDef.color,
+            r: 4, life: 1.2, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
           });
         });
       } else if (weaponDef.mode === 'shotgun') {
@@ -1446,44 +1569,44 @@ function update(dt, now) {
           const a = angle + offset;
           state.bullets.push({
             x: p.x, y: p.y, vx: Math.cos(a) * 560, vy: Math.sin(a) * 560,
-            r: 4, life: 0.35, damage: weaponDef.damage, color: weaponDef.color,
+            r: 4, life: 0.35, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
             knockbackMul: 1.6,
           });
         });
       } else if (weaponDef.mode === 'rocket') {
         state.bullets.push({
           x: p.x, y: p.y, vx: Math.cos(angle) * 420, vy: Math.sin(angle) * 420,
-          r: 6, life: 1.6, damage: weaponDef.damage, color: weaponDef.color,
+          r: 6, life: 1.6, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
           explosive: true,
         });
       } else if (weaponDef.mode === 'ricochet') {
         state.bullets.push({
           x: p.x, y: p.y, vx: Math.cos(angle) * 620, vy: Math.sin(angle) * 620,
-          r: 4, life: 2.5, damage: weaponDef.damage, color: weaponDef.color,
+          r: 4, life: 2.5, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
           bounces: 2, hitSet: new Set(),
         });
       } else if (weaponDef.mode === 'ice') {
         state.bullets.push({
           x: p.x, y: p.y, vx: Math.cos(angle) * 560, vy: Math.sin(angle) * 560,
-          r: 4, life: 1.3, damage: weaponDef.damage, color: weaponDef.color,
+          r: 4, life: 1.3, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
           freeze: true,
         });
       } else if (weaponDef.mode === 'poison') {
         state.bullets.push({
           x: p.x, y: p.y, vx: Math.cos(angle) * 520, vy: Math.sin(angle) * 520,
-          r: 4, life: 1.4, damage: weaponDef.damage, color: weaponDef.color,
+          r: 4, life: 1.4, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
           poison: true,
         });
       } else if (weaponDef.mode === 'laser') {
         state.bullets.push({
           x: p.x, y: p.y, vx: Math.cos(angle) * 2600, vy: Math.sin(angle) * 2600,
-          r: 5, life: 0.4, damage: weaponDef.damage, color: weaponDef.color,
+          r: 5, life: 0.4, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
           hitSet: new Set(),
         });
       } else {
         state.bullets.push({
           x: p.x, y: p.y, vx: Math.cos(angle) * 620, vy: Math.sin(angle) * 620,
-          r: 4, life: 1.2, damage: weaponDef.damage, color: weaponDef.color,
+          r: 4, life: 1.2, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
         });
       }
     }
@@ -2189,6 +2312,26 @@ function render() {
       ctx.beginPath();
       ctx.arc(e.x, e.y + bob, size * 0.45, 0, Math.PI * 2);
       ctx.fill();
+      ctx.restore();
+    }
+    // Sponsor name tag - persistent for as long as the boss is alive
+    // (unlike the transient aggro/death speech bubbles), so a viewer's
+    // sub/gift/mega tip stays visibly "theirs" for the whole fight.
+    if (e.sponsorName) {
+      ctx.save();
+      const label = (e.sponsorName.length > 16 ? e.sponsorName.slice(0, 16) + '…' : e.sponsorName) + "'S WRATH";
+      ctx.font = "10px 'Press Start 2P', monospace";
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const textWidth = ctx.measureText(label).width;
+      const tagY = e.y + bob - size / 2 - 16;
+      ctx.fillStyle = 'rgba(11,12,15,0.85)';
+      ctx.strokeStyle = '#ff3d7f';
+      ctx.lineWidth = 1;
+      ctx.fillRect(e.x - textWidth / 2 - 6, tagY - 8, textWidth + 12, 16);
+      ctx.strokeRect(e.x - textWidth / 2 - 6, tagY - 8, textWidth + 12, 16);
+      ctx.fillStyle = '#fff2a8';
+      ctx.fillText(label, e.x, tagY);
       ctx.restore();
     }
   });

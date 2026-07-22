@@ -51,8 +51,9 @@
       <div class="rule"><span class="tag">!heal</span> restores 20 HP</div>
       <div class="rule"><span class="tag">!shield</span> 3s of invincibility</div>
       <div class="rule"><span class="tag">!slow</span> slows every enemy for 5s</div>
+      <div class="rule"><span class="tag">!taunt</span> your words appear as an enemy's speech bubble</div>
       <div class="rule"><span class="tag">follow</span> spawns a fighting ally</div>
-      <div class="rule"><span class="tag">sub / gift</span> triggers a boss wave</div>
+      <div class="rule"><span class="tag">sub / gift</span> summons a boss with your name on it</div>
       <div class="rule"><span class="tag">vote</span> summons a horde sized to the vote</div>
     </div>
   </div>
@@ -106,7 +107,8 @@
       <div class="rule"><span class="tag">Aim & Shoot</span> point with the mouse, click and hold to fire (auto-aims on mobile - use the shoot button)</div>
       <div class="rule"><span class="tag">Shield</span> Shift key for a brief invincibility window, on a cooldown (or the shield button on mobile)</div>
       <div class="rule"><span class="tag">Pause</span> Esc or P</div>
-      <div class="rule"><span class="tag">Chat</span> your live Blaze chat is the game master - !spawn, !heal, !shield, !slow, follows, subs, votes, and tips all affect the run in real time</div>
+      <div class="rule"><span class="tag">Chat</span> your live Blaze chat is the game master - !spawn, !heal, !shield, !slow, !taunt, follows, subs, votes, and tips all affect the run in real time</div>
+      <div class="rule"><span class="tag">Vibe</span> the HELP/CHAOS gauge tracks whether chat's been helping or piling on - lean far enough either way and it starts to matter</div>
     </div>
     <button id="howto-start-btn" class="login-btn" style="border:none;cursor:pointer;margin-top:24px;">Start</button>
   </div>
@@ -143,6 +145,11 @@
     <div class="weapon-bar-track"><div id="weapon-bar" class="weapon-bar-fill"></div></div>
   </div>
   <div id="shield-badge" class="pill shield-pill ready">SHIELD READY</div>
+  <div id="tension-badge" class="pill tension-pill">
+    <span class="tension-label">HELP</span>
+    <div class="tension-track"><div id="tension-fill" class="tension-fill"></div></div>
+    <span class="tension-label">CHAOS</span>
+  </div>
 
   <div id="mobile-controls" class="mobile-controls hidden">
     <div id="joystick-base" class="joystick-base">
