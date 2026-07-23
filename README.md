@@ -30,15 +30,16 @@ Most stream-integrated games treat chat as a sidebar — a feed to glance at whi
   | `channel.thanks` (tip), small | spawns a one-hit-kill "loot" enemy worth a big score bonus |
   | `channel.thanks` (tip), medium | unlocks the electric weapon for 15 seconds |
   | `channel.thanks` (tip), large | MEGA TIP banner + a named boss wave, with HP scaled to the tip size |
-- **Leaderboard** — persisted to `leaderboard.json` on the server, tied to the player's real Blaze display name and avatar; top 10 shown after every run.
+- **Leaderboard ("Hall of Flame")** — persisted to `leaderboard.json` on the server, tied to the player's real Blaze display name and avatar. One best-run row per player (the server dedupes), gold/silver/bronze styling for the top 3, and the death screen reports your true standing among players ("You placed #N").
 - **Help vs Chaos tension meter** — every chat-driven effect nudges a rolling HUD gauge toward "help" (heals, shields, allies, weapon unlocks) or "chaos" (spawns, hordes, boss waves), decaying back toward neutral over time. Sustained chaos gives newly spawned enemies a small speed edge; sustained help gives the player a small damage boost — the community's recent mood has a small but real effect on the run, not just individual commands in isolation.
 - **Named raid bosses** — a sub, gift-sub bomb, or large tip doesn't just spawn a generic boss: the boss carries that viewer's name as a persistent title tag for as long as it's alive, and its HP scales up with gift count / tip size, so a big gift bomb or mega tip reads as a genuinely tougher, personally-attributed threat rather than the same fixed boss pack every time.
 
 ### Wave & difficulty progression
 
-- Waves last 30 seconds each. Every 5th wave spawns a boss pack (1–2 bosses plus 3 regular enemies).
+- **Waves are kill-gated, not timed** — each wave has an enemy quota (10 + 2 per wave, capped at 30) that trickles in at the normal spawn pacing, and the wave only ends when the quota has fully spawned *and* the arena is completely clear. Chat-spawned extras count: if chat piles on mid-wave, those have to die too before the wave advances. Clearing a wave pays a score bonus (wave × 25), and the HUD shows a live kill counter ("WAVE 3 · 12 LEFT").
+- Every 5th wave spawns a boss pack (1–2 bosses plus 3 regular enemies), counted as part of that wave's quota.
 - The enemy type pool grows as waves climb — new types phase in gradually (starting with chaser/grunt on wave 1, all the way through the elemental elites unlocking one-by-one through wave 14) so the threat mix deepens instead of dumping everything on the player at once.
-- **Danger waves** — every 3rd wave (every *other* wave from wave 10 onward), skipping boss waves — trade crowd size for individual toughness: fewer enemies spawn, but they arrive with +60% HP and +15% speed and a pulsing red glow so the buff is visible at a glance.
+- **Danger waves** — every 3rd wave (every *other* wave from wave 10 onward), skipping boss waves — trade crowd size for individual toughness: a ~30% smaller quota, but enemies arrive with +60% HP and +15% speed and a pulsing red glow so the buff is visible at a glance.
 - From wave 10, a hard-mode multiplier makes the entire enemy roster progressively tankier and faster on top of the normal per-wave creep, and enemies arrive at a faster pace — this is what makes the back half of a run noticeably harder rather than plateauing.
 - Two health pickups are guaranteed to spawn every wave (one in the first half, one in the second).
 
@@ -53,9 +54,24 @@ Sixteen enemy types in total:
 
 The default gun plus ten timed pickups (15 seconds each), collected from pulsing diamond pickups that spawn periodically on the field (up to 3 at a time, each expiring after 25 seconds if ignored):
 
-`spread` (3-way shot) · `rapid` (fast fire rate) · `electric` (continuous beam, auto-tracks the nearest enemy in its line) · `ricochet` (bounces off arena walls, pierces multiple enemies) · `shotgun` (5-pellet spread with heavy knockback) · `rocket` (splash-damage explosive) · `flamethrower` (continuous damage cone) · `ice` (chills whatever it hits) · `poison` (damage-over-time dart) · `laser` (near-instant piercing bolt through a lined-up crowd)
+`spread` (3-way shot) · `rapid` (fast fire rate) · `electric` (continuous beam, auto-tracks the nearest enemy in its line) · `ricochet` (bounces off arena walls, pierces multiple enemies) · `shotgun` (5-pellet spread with heavy knockback) · `rocket` (splash-damage explosive) · `flamethrower` (continuous damage cone) · `ice` (chills whatever it hits) · `poison` (draining venom — 2 HP/s for 4s per tag, stacking to 4 HP/s on repeat hits) · `laser` (near-instant piercing bolt through a lined-up crowd)
 
 A HUD badge shows the active weapon and a countdown bar for its remaining duration.
+
+### Defender summons (keys 1–4)
+
+Four summonable elite backup units, each with its own weapon, a one-shot superpower on arrival, and an independent cooldown — press 1–4 on desktop or tap their HUD slots on mobile:
+
+- **GUNNER** (60s cooldown) — rapid-fire rifle; grants the player a damage-reduction aura for its full deployment
+- **SNIPER** (120s) — slow piercing shots; marks the 3 nearest enemies to take +50% damage from *all* sources, with 1.5× score for marked kills
+- **BOMBER** (180s) — lobbed splash grenades; knockback shockwave on arrival
+- **VOLTAGE** (240s) — chain lightning through up to 3 enemies; stuns everything nearby for 1.5s on arrival
+
+Defenders fight for 15 seconds then visibly flee off the nearest edge. They're real combatants, not turrets: enemies aggro whichever of player/defender is closer, enemy fire and contact drain defender HP, and defenders kite at their preferred range, circle-strafe, and actively sidestep incoming projectiles. Summoning while one is out sends the current one fleeing early (the burned cooldown is the cost of the swap).
+
+### Mine ability (E or M)
+
+A standing ability, separate from weapon pickups: plant a proximity bomb at your feet every 10 seconds (dedicated mobile button included). Mines arm after 0.4s, detonate when an enemy wanders close or when their 8-second fuse runs out, up to 6 on the field — planting a 7th detonates the oldest. Planted mines outlive whatever weapon you're holding.
 
 ### Health pickups
 
@@ -63,7 +79,7 @@ Pulsing pixel-heart icons — distinct in shape from the weapon diamonds — res
 
 ### Player shield ability
 
-**Shift** (desktop) or the dedicated shield button (mobile touch controls) grants 2 seconds of personal invincibility on a 12-second cooldown, with a HUD badge showing "SHIELD READY" or a countdown. It shares the same underlying timer as chat-granted shields (`!shield`, tip rewards), so overlapping sources extend the shield rather than cutting each other short.
+**Shift** (desktop) or the dedicated shield button (mobile touch controls) grants 20 seconds of personal invincibility on a 45-second cooldown, with a HUD badge showing "SHIELD READY" or a countdown. It shares the same underlying timer as chat-granted shields (`!shield`, tip rewards), so overlapping sources extend the shield rather than cutting each other short.
 
 ### Background tier changes
 
@@ -75,7 +91,20 @@ A fully procedural war-torn backdrop — no image assets — built from layered 
 - Momentum-based movement, knockback impulses, screen shake, and brief hitstop freeze-frames on impactful kills.
 - Every enemy type has multiple unique spawn and death lines, delivered as animated pixel speech bubbles paired with a pre-generated, pitch-shifted ElevenLabs voice line — the player has their own quip pools too (general kills, 10-kill streak milestones, tougher-enemy kills, and boss kills) — all funneled through a one-at-a-time voice queue so lines never overlap.
 - Gunshots, hit/damage sounds, the game-over jingle, and the background music loop are all synthesized live via the Web Audio API — zero audio assets to ship or license for any of it, only the pre-generated dialogue voice lines are real files.
-- Static cover obstacles block bullets and push entities around them.
+- Ten static cover bricks (spread with anti-clump spacing so there's nearly always something to dodge behind) block bullets and push entities around them.
+
+### Narrated intro cinematic
+
+A skippable five-scene war-story short plays before the session's first game — no video or image assets, every scene is animated live on a canvas out of the game's own pixel sprites and procedural battlefields: artillery bombardment with camera shake, the horde charging, the lone fighter actually gunning down waves in a running battle sim, a boss drop-in under concentrated fire and chain lightning, and an exploding title card — all under cinematic letterbox bars. A deep, slow ElevenLabs narrator reads the story, and each slide holds until its voice-over finishes (with a fixed-timing fallback if audio is blocked). Click to advance, SKIP or Escape to bail.
+
+### Death screen & Chat's Verdict
+
+The run-over screen is built around the game's chat identity, not a generic score card:
+
+- **SLAIN BY** — a glowing sprite portrait and name of the exact enemy that landed the killing blow (attributed through contact, projectiles, and lingering hazard pools), which then *taunts you out loud* in its own character voice.
+- **Chat's Verdict** — two awards only a chat-driven game can give: **CHAT GUARDIAN** (the viewer whose heals/shields/follows helped most) and **CHAT SABOTEUR** (the viewer who sent the most spawns/hordes/boss waves at you), with per-viewer event tallies.
+- **Narrator epitaph** — the intro's narrator returns to read a randomized eulogy over your corpse.
+- Plus an action-game letter grade (D through SS) stamped in, an animated score count-up, run stat cards (wave / kills / best streak / bosses / time survived), a personal-best tracker that only celebrates beating a real previous record, and the Hall of Flame leaderboard.
 
 ## How to run it locally
 
