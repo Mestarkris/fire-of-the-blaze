@@ -6,6 +6,7 @@
 const loginScreen = document.getElementById('login-screen');
 const startScreen = document.getElementById('start-screen');
 const howtoScreen = document.getElementById('howto-screen');
+const introScreen = document.getElementById('intro-screen');
 const gameScreen = document.getElementById('game-screen');
 const gameOverScreen = document.getElementById('gameover-screen');
 const pauseScreen = document.getElementById('pause-screen');
@@ -55,19 +56,25 @@ function goFullscreenOnMobile() {
 document.addEventListener('fullscreenchange', resizeCanvas);
 document.addEventListener('webkitfullscreenchange', resizeCanvas);
 
-// The controls/chat-effects explainer is shown once, the first time a
-// session presses Play - every later restart (from game over, or the pause
-// menu) skips straight into a fresh run.
+// First press of Play in a session runs the story intro, then the
+// controls explainer; every later restart (from game over, or the pause
+// menu) skips both and goes straight into a fresh run.
 let hasSeenHowToPlay = false;
+let hasSeenIntro = false;
 
 document.getElementById('play-btn').addEventListener('click', () => {
-  if (hasSeenHowToPlay) {
-    goFullscreenOnMobile();
-    startGame();
+  if (!hasSeenIntro) {
+    startScreen.classList.add('hidden');
+    startIntro();
     return;
   }
-  startScreen.classList.add('hidden');
-  howtoScreen.classList.remove('hidden');
+  if (!hasSeenHowToPlay) {
+    startScreen.classList.add('hidden');
+    howtoScreen.classList.remove('hidden');
+    return;
+  }
+  goFullscreenOnMobile();
+  startGame();
 });
 
 document.getElementById('howto-start-btn').addEventListener('click', () => {
@@ -75,6 +82,556 @@ document.getElementById('howto-start-btn').addEventListener('click', () => {
   howtoScreen.classList.add('hidden');
   goFullscreenOnMobile();
   startGame();
+});
+
+// ---------------------------------------------------------------------------
+// Intro story slideshow - a short war-story cinematic shown once, before the
+// session's first game. No video/image assets: every scene is drawn live on
+// a canvas out of the game's own pixel sprites and procedural battlefield
+// layers, so it loads instantly and looks native to the game. Slides
+// auto-advance; clicking anywhere advances early; SKIP bails out entirely.
+// ---------------------------------------------------------------------------
+
+const introCanvas = document.getElementById('intro-canvas');
+const introCtx = introCanvas.getContext('2d');
+// Hard ceiling per slide - normally the narrator's voice-over ends the slide
+// well before this; it only bites if audio stalls without erroring.
+const INTRO_SLIDE_MS = 9000;
+let introState = null; // { slide, slideStart, raf } while the intro is playing
+
+// Narration text lives in its own plain-strings const so
+// scripts/generate-voices.js can extract it (same mechanism as DIALOGUE /
+// PLAYER_LINES) and pre-generate one narrator_N.mp3 per slide - a deep,
+// slow, human voice-over reading the story.
+const INTRO_NARRATION = {
+  lines: [
+    'These plains were green once. Then the war came, and the fires never went out.',
+    'The horde pours in without end - wave after wave, each crueler than the last.',
+    'Every army fled. One fighter turned back, and held the line alone.',
+    'Alone - except for the voices. Your chat is the fire in your hands... and sometimes the knife at your back.',
+    'Hold the line.',
+  ],
+};
+
+const INTRO_SLIDES = [
+  { caption: INTRO_NARRATION.lines[0], draw: drawIntroBattlefield },
+  { caption: INTRO_NARRATION.lines[1], draw: drawIntroHorde },
+  { caption: INTRO_NARRATION.lines[2], draw: drawIntroFighter },
+  { caption: INTRO_NARRATION.lines[3], draw: drawIntroChat },
+  { caption: INTRO_NARRATION.lines[4], draw: drawIntroTitle },
+];
+
+// --- Per-slide FX simulation ------------------------------------------------
+// Each slide is a self-contained action scene: shells fall, bullets fly,
+// enemies charge and die, the camera shakes. All of it runs in this little
+// sim, reset on every slide change, so scenes are alive rather than static
+// tableaux with captions.
+let introFx = null;
+function resetIntroFx() {
+  introFx = { shells: [], bullets: [], parts: [], rings: [], enemies: [], arcs: [], timers: {}, shake: 0, flash: 0, muzzle: 0, seeded: false };
+}
+
+// SPRITES has no 'chaser' key - the base chaser renders with the generic
+// enemy sprite in-game via a || fallback; the intro scenes need the same
+// fallback or drawSprite crashes on undefined and kills the whole loop.
+function introSprite(type) {
+  return SPRITES[type] || SPRITES.enemy;
+}
+
+function fxBurst(x, y, color, n = 14, speed = 220) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = speed * (0.4 + Math.random() * 0.8);
+    introFx.parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.45 + Math.random() * 0.25, color });
+  }
+}
+
+function fxRing(x, y, color) {
+  introFx.rings.push({ x, y, r: 8, life: 0.5, color });
+}
+
+// Runs fn roughly every `interval` seconds of slide-time - the timing
+// backbone for shots, spawns, and artillery in the scenes below.
+function fxEvery(key, interval, t, fn) {
+  if (t - (introFx.timers[key] || -Infinity) >= interval) {
+    introFx.timers[key] = t;
+    fn();
+  }
+}
+
+function fxMoveDrawBullets(c, dt) {
+  introFx.bullets.forEach((b) => {
+    b.life -= dt;
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    c.globalAlpha = 0.4;
+    c.fillStyle = b.color;
+    c.fillRect(b.x - b.vx * 0.012 - 3, b.y - b.vy * 0.012 - 3, 6, 6);
+    c.globalAlpha = 1;
+    c.fillRect(b.x - 3, b.y - 3, 6, 6);
+  });
+  introFx.bullets = introFx.bullets.filter((b) => b.life > 0);
+}
+
+function fxUpdateAndDraw(c, dt) {
+  introFx.parts.forEach((p) => { p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; });
+  introFx.parts = introFx.parts.filter((p) => p.life > 0);
+  introFx.parts.forEach((p) => {
+    c.globalAlpha = Math.max(0, p.life / 0.5);
+    c.fillStyle = p.color;
+    c.fillRect(p.x - 2, p.y - 2, 4, 4);
+  });
+  c.globalAlpha = 1;
+  introFx.rings.forEach((r) => { r.life -= dt; r.r += 280 * dt; });
+  introFx.rings = introFx.rings.filter((r) => r.life > 0);
+  introFx.rings.forEach((r) => {
+    c.save();
+    c.globalAlpha = Math.max(0, r.life / 0.5);
+    c.strokeStyle = r.color;
+    c.lineWidth = 3;
+    c.beginPath();
+    c.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+    c.stroke();
+    c.restore();
+  });
+}
+
+// Slide 1: the war zone under artillery fire - tracers streak down, blasts
+// crater the ground, the camera flinches with every impact.
+function drawIntroBattlefield(c, w, h, t, dt) {
+  const zoom = 1 + t * 0.012;
+  c.save();
+  c.translate(w / 2, h / 2);
+  c.scale(zoom, zoom);
+  c.translate(-w / 2, -h / 2);
+  c.drawImage(getBackgroundLayerForTier(2), 0, 0);
+  c.restore();
+  drawFog(c, w, h, performance.now() / 1000, 2);
+
+  fxEvery('shell', 0.55, t, () => {
+    const tx = w * (0.1 + Math.random() * 0.8);
+    const ty = h * (0.5 + Math.random() * 0.4);
+    introFx.shells.push({ x: tx + 140, y: -30, tx, ty });
+  });
+  introFx.shells.forEach((s) => {
+    const vy = 950;
+    const vx = ((s.tx - s.x) / Math.max(0.05, (s.ty - s.y) / vy));
+    s.x += vx * dt;
+    s.y += vy * dt;
+    c.strokeStyle = 'rgba(255,210,130,0.85)';
+    c.lineWidth = 2;
+    c.beginPath();
+    c.moveTo(s.x, s.y);
+    c.lineTo(s.x - vx * 0.035, s.y - 34);
+    c.stroke();
+    if (s.y >= s.ty) {
+      s.dead = true;
+      fxBurst(s.tx, s.ty, '#ff9d3d', 22, 280);
+      fxBurst(s.tx, s.ty, '#ffe08a', 12, 170);
+      fxRing(s.tx, s.ty, '#ff6a1a');
+      introFx.shake = Math.max(introFx.shake, 8);
+      introFx.flash = 0.16;
+    }
+  });
+  introFx.shells = introFx.shells.filter((s) => !s.dead);
+  fxUpdateAndDraw(c, dt);
+
+  const vg = c.createRadialGradient(w / 2, h / 2, h * 0.3, w / 2, h / 2, h * 0.85);
+  vg.addColorStop(0, 'rgba(0,0,0,0)');
+  vg.addColorStop(1, 'rgba(0,0,0,0.6)');
+  c.fillStyle = vg;
+  c.fillRect(0, 0, w, h);
+  if (introFx.flash > 0) {
+    c.fillStyle = `rgba(255,220,160,${introFx.flash})`;
+    c.fillRect(0, 0, w, h);
+    introFx.flash -= dt * 1.1;
+  }
+}
+
+// Slide 2: the horde charging left at full speed - dust at their feet,
+// ranged elites loosing bolts ahead of the charge, endless wraparound ranks.
+function drawIntroHorde(c, w, h, t, dt) {
+  c.drawImage(getBackgroundLayerForTier(4), 0, 0);
+  const nowSec = performance.now() / 1000;
+  if (!introFx.seeded) {
+    introFx.seeded = true;
+    const types = ['swarmer', 'chaser', 'grunt', 'archer', 'sniper', 'pyro', 'brute', 'frostguard', 'boss', 'chaser', 'grunt', 'swarmer', 'toxic', 'stormcaller'];
+    types.forEach((type) => {
+      introFx.enemies.push({
+        type,
+        x: w * 0.3 + Math.random() * w * 0.9,
+        y: h * (0.48 + Math.random() * 0.38),
+        spd: 90 + Math.random() * 110,
+        seed: Math.random() * 6,
+      });
+    });
+  }
+  introFx.enemies.forEach((e) => {
+    e.x -= e.spd * dt;
+    if (e.x < -70) e.x = w + 70;
+    const size = e.type === 'boss' ? 92 : e.type === 'brute' || e.type === 'frostguard' ? 60 : e.type === 'swarmer' ? 26 : 44;
+    drawSprite(c, introSprite(e.type), e.x, e.y + Math.sin(nowSec * 5 + e.seed) * 4, size, true);
+    if (Math.random() < dt * 5) {
+      introFx.parts.push({ x: e.x + size * 0.4, y: e.y + size * 0.45, vx: 40, vy: -20 - Math.random() * 40, life: 0.35, color: 'rgba(140,100,70,0.8)' });
+    }
+    if ((e.type === 'archer' || e.type === 'stormcaller' || e.type === 'sniper') && Math.random() < dt * 0.7) {
+      introFx.bullets.push({ x: e.x - 20, y: e.y, vx: -560, vy: (Math.random() - 0.5) * 80, life: 1.1, color: e.type === 'stormcaller' ? '#4dd8ff' : '#c8a25a' });
+    }
+  });
+  fxMoveDrawBullets(c, dt);
+  fxUpdateAndDraw(c, dt);
+  const g = c.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, 'rgba(255,45,45,0.18)');
+  g.addColorStop(0.5, 'rgba(0,0,0,0)');
+  c.fillStyle = g;
+  c.fillRect(0, 0, w, h);
+}
+
+// Slide 3: the last stand, played out live - enemies charge in from the
+// right, the fighter tracks and guns them down one by one, every kill a
+// burst of pixels and a camera flinch. A real battle, not a pose.
+function drawIntroFighter(c, w, h, t, dt) {
+  c.drawImage(getBackgroundLayerForTier(3), 0, 0);
+  const nowSec = performance.now() / 1000;
+  const bob = Math.sin(nowSec * 3) * 3;
+  const px = w * 0.28, py = h * 0.52 + bob;
+
+  fxEvery('spawn', 0.45, t, () => {
+    const type = ['chaser', 'grunt', 'swarmer', 'dasher'][Math.floor(Math.random() * 4)];
+    introFx.enemies.push({
+      type,
+      x: w + 50,
+      y: h * 0.3 + Math.random() * h * 0.45,
+      spd: 170 + Math.random() * 140,
+      seed: Math.random() * 6,
+      hp: 1,
+    });
+  });
+
+  let nearestE = null, best = Infinity;
+  introFx.enemies.forEach((e) => {
+    const dd = Math.hypot(e.x - px, e.y - py);
+    if (dd < best) { best = dd; nearestE = e; }
+  });
+  const aim = nearestE ? Math.atan2(nearestE.y - py, nearestE.x - px) : 0;
+
+  fxEvery('shot', 0.13, t, () => {
+    if (!nearestE) return;
+    introFx.bullets.push({ x: px + Math.cos(aim) * 24, y: py + Math.sin(aim) * 24, vx: Math.cos(aim) * 760, vy: Math.sin(aim) * 760, life: 1.3, color: '#F0B90B' });
+    introFx.muzzle = 0.06;
+  });
+
+  introFx.enemies.forEach((e) => {
+    const a = Math.atan2(py - e.y, px - e.x);
+    e.x += Math.cos(a) * e.spd * dt;
+    e.y += Math.sin(a) * e.spd * dt;
+  });
+  introFx.bullets.forEach((b) => {
+    introFx.enemies.forEach((e) => {
+      if (b.life > 0 && e.hp > 0 && Math.hypot(b.x - e.x, b.y - e.y) < 26) {
+        b.life = 0;
+        e.hp = 0;
+        fxBurst(e.x, e.y, '#e94f6b', 14, 240);
+        fxRing(e.x, e.y, '#ff3d7f');
+        introFx.shake = Math.max(introFx.shake, 5);
+      }
+    });
+  });
+  introFx.enemies = introFx.enemies.filter((e) => e.hp > 0 && e.x > -60);
+  introFx.enemies.forEach((e) => {
+    const size = e.type === 'swarmer' ? 26 : 42;
+    drawSprite(c, introSprite(e.type), e.x, e.y + Math.sin(nowSec * 5 + e.seed) * 3, size, true);
+  });
+
+  fxMoveDrawBullets(c, dt);
+  fxUpdateAndDraw(c, dt);
+
+  drawSprite(c, SPRITES.playerF1, px, py, 84, Math.cos(aim) < 0);
+  c.save();
+  c.translate(px, py);
+  c.scale(1.9, 1.9);
+  drawGun(c, 0, 0, aim, '#F0B90B');
+  c.restore();
+  if (introFx.muzzle > 0) {
+    c.fillStyle = 'rgba(255,240,180,0.9)';
+    c.beginPath();
+    c.arc(px + Math.cos(aim) * 42, py + Math.sin(aim) * 42, 7, 0, Math.PI * 2);
+    c.fill();
+    introFx.muzzle -= dt;
+  }
+}
+
+// Slide 4: chat's power made flesh - a boss crashes down and the fighter,
+// the follow-ally, and a defender pour concentrated fire and chain
+// lightning into it while the commands that summoned them float past.
+function drawIntroChat(c, w, h, t, dt) {
+  c.drawImage(getBackgroundLayerForTier(1), 0, 0);
+  const nowSec = performance.now() / 1000;
+  const bossX = w * 0.72;
+  const bossLandY = h * 0.45;
+  const bossY = Math.min(bossLandY, -80 + t * 520) + (t > 1.2 ? Math.sin(nowSec * 4) * 4 : 0);
+  if (bossY >= bossLandY && !introFx.timers.landed) {
+    introFx.timers.landed = 1;
+    fxBurst(bossX, bossLandY + 40, '#ff3d7f', 26, 300);
+    fxRing(bossX, bossLandY + 40, '#ff3d7f');
+    introFx.shake = Math.max(introFx.shake, 12);
+  }
+
+  const heroes = [
+    { x: w * 0.24, y: h * 0.58 + Math.sin(nowSec * 3) * 3, sprite: SPRITES.playerF1, size: 72, color: '#F0B90B', rate: 0.16, gunScale: 1.7 },
+    { x: w * 0.13, y: h * 0.52 + Math.sin(nowSec * 4) * 4, sprite: SPRITES.ally, size: 44, color: '#38e8d4', rate: 0.24, gunScale: 1.2 },
+    { x: w * 0.34, y: h * 0.7 + Math.sin(nowSec * 4 + 1) * 4, sprite: SPRITES.def_gunner, size: 46, color: '#d0ff3d', rate: 0.2, gunScale: 1.2 },
+  ];
+  heroes.forEach((hero, i) => {
+    const a = Math.atan2(bossY - hero.y, bossX - hero.x);
+    drawSprite(c, hero.sprite, hero.x, hero.y, hero.size, false);
+    c.save();
+    c.translate(hero.x, hero.y);
+    c.scale(hero.gunScale, hero.gunScale);
+    drawGun(c, 0, 0, a, hero.color);
+    c.restore();
+    if (introFx.timers.landed) {
+      fxEvery('hero' + i, hero.rate, t, () => {
+        introFx.bullets.push({ x: hero.x + Math.cos(a) * 26, y: hero.y + Math.sin(a) * 26, vx: Math.cos(a) * 700, vy: Math.sin(a) * 700, life: 1.2, color: hero.color, targetBoss: true });
+      });
+    }
+  });
+
+  // Voltage-style chain lightning slamming the boss on a cycle.
+  if (introFx.timers.landed) {
+    fxEvery('arc', 0.8, t, () => {
+      introFx.arcs.push({ x1: w * 0.34, y1: h * 0.7, x2: bossX, y2: bossY, life: 0.16 });
+    });
+  }
+  introFx.arcs.forEach((a) => { a.life -= dt; });
+  introFx.arcs = introFx.arcs.filter((a) => a.life > 0);
+  introFx.arcs.forEach((a) => {
+    c.save();
+    c.globalAlpha = Math.max(0, a.life / 0.16);
+    c.strokeStyle = '#9dfbff';
+    c.lineWidth = 2;
+    c.beginPath();
+    c.moveTo(a.x1, a.y1);
+    for (let s = 1; s <= 4; s++) {
+      const fx = a.x1 + ((a.x2 - a.x1) * s) / 5 + (Math.random() - 0.5) * 14;
+      const fy = a.y1 + ((a.y2 - a.y1) * s) / 5 + (Math.random() - 0.5) * 14;
+      c.lineTo(fx, fy);
+    }
+    c.lineTo(a.x2, a.y2);
+    c.stroke();
+    c.restore();
+  });
+
+  // Bullets detonate against the boss in sparks.
+  introFx.bullets.forEach((b) => {
+    if (b.targetBoss && b.life > 0 && Math.hypot(b.x - bossX, b.y - bossY) < 46) {
+      b.life = 0;
+      fxBurst(b.x, b.y, b.color, 6, 160);
+    }
+  });
+  fxMoveDrawBullets(c, dt);
+
+  const bossFlash = introFx.parts.length > 25;
+  drawSprite(c, SPRITES.boss, bossX, bossY, 100, true);
+  if (bossFlash) {
+    c.save();
+    c.globalAlpha = 0.35;
+    c.globalCompositeOperation = 'lighter';
+    drawSprite(c, SPRITES.boss, bossX, bossY, 100, true);
+    c.restore();
+  }
+  fxUpdateAndDraw(c, dt);
+
+  const msgs = [['!heal', '#38e8d4'], ['SUB - BOSS WAVE', '#ff3d7f'], ['new follower', '#F0B90B'], ['!shield', '#38e8d4']];
+  c.save();
+  c.font = "10px 'Press Start 2P', monospace";
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  const cycle = h * 0.9;
+  msgs.forEach(([text, color], i) => {
+    const y = h - ((t * 55 + (i * cycle) / msgs.length) % cycle);
+    const x = w * (0.5 + (i % 2) * 0.06) + Math.sin(nowSec + i) * 14;
+    const alpha = 0.8 * Math.min(1, (h - y) / 120) * Math.min(1, y / (h * 0.25));
+    if (alpha <= 0) return;
+    const tw = c.measureText(text).width;
+    c.globalAlpha = alpha;
+    c.fillStyle = 'rgba(11,12,15,0.85)';
+    c.fillRect(x - tw / 2 - 8, y - 11, tw + 16, 22);
+    c.strokeStyle = color;
+    c.lineWidth = 1;
+    c.strokeRect(x - tw / 2 - 8, y - 11, tw + 16, 22);
+    c.fillStyle = color;
+    c.fillText(text, x, y);
+  });
+  c.restore();
+}
+
+// Slide 5: title card revealed by a blast, embers rising, the horde still
+// silhouetted on the horizon.
+function drawIntroTitle(c, w, h, t, dt) {
+  c.fillStyle = '#050303';
+  c.fillRect(0, 0, w, h);
+  const nowSec = performance.now() / 1000;
+  if (!introFx.timers.boom) {
+    introFx.timers.boom = 1;
+    fxBurst(w / 2, h * 0.46, '#ff9d3d', 30, 380);
+    fxBurst(w / 2, h * 0.46, '#F0B90B', 18, 260);
+    fxRing(w / 2, h * 0.46, '#ff6a1a');
+    introFx.shake = 10;
+  }
+  c.save();
+  c.globalAlpha = 0.22;
+  ['chaser', 'brute', 'swarmer', 'boss', 'grunt', 'pyro'].forEach((type, i) => {
+    const x = w * (0.08 + i * 0.16) + Math.sin(nowSec * 2 + i) * 6;
+    drawSprite(c, introSprite(type), x, h * 0.88, type === 'boss' ? 60 : 36, true);
+  });
+  c.restore();
+  for (let i = 0; i < 24; i++) {
+    const ey = h - ((nowSec * (30 + (i % 5) * 10) + i * 97) % (h + 40));
+    const ex = ((i * 127) % w) + Math.sin(nowSec + i) * 20;
+    c.fillStyle = 'rgba(255,140,40,0.55)';
+    c.fillRect(ex, ey, 3, 3);
+  }
+  fxUpdateAndDraw(c, dt);
+  const flicker = 0.9 + 0.1 * Math.sin(performance.now() / 90);
+  c.save();
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.font = `${Math.min(40, w / 18)}px 'Press Start 2P', monospace`;
+  c.shadowColor = 'rgba(255,90,26,0.8)';
+  c.shadowBlur = 30 * flicker;
+  c.fillStyle = '#F0B90B';
+  c.fillText('FIRE OF THE', w / 2, h * 0.4);
+  c.fillText('BLAZE', w / 2, h * 0.51);
+  c.shadowBlur = 0;
+  c.font = "12px 'Press Start 2P', monospace";
+  c.fillStyle = '#8a8f9a';
+  c.fillText('Your chat is the game master.', w / 2, h * 0.65);
+  c.restore();
+}
+
+function startIntro() {
+  // Size the (still hidden) game canvas first so the shared procedural
+  // background layer cache builds at full-screen dimensions.
+  resizeCanvas();
+  introCanvas.width = window.innerWidth;
+  introCanvas.height = window.innerHeight;
+  introScreen.classList.remove('hidden');
+  const dots = document.getElementById('intro-dots');
+  dots.innerHTML = '';
+  INTRO_SLIDES.forEach(() => {
+    const dot = document.createElement('span');
+    dot.className = 'intro-dot';
+    dots.appendChild(dot);
+  });
+  introState = { slide: -1, slideStart: 0, raf: 0 };
+  setIntroSlide(0);
+  introLoop();
+}
+
+// The narrator paces the show: each slide holds until its voice-over line
+// finishes (plus a beat), with INTRO_SLIDE_MS as a hard ceiling and the old
+// fixed timing as the fallback if an audio file is missing or blocked.
+let introVoice = null;
+
+function stopIntroVoice() {
+  if (introVoice) {
+    introVoice.pause();
+    introVoice = null;
+  }
+}
+
+function setIntroSlide(i) {
+  introState.slide = i;
+  introState.slideStart = performance.now();
+  introState.advanceAt = performance.now() + INTRO_SLIDE_MS;
+  resetIntroFx();
+  const captionEl = document.getElementById('intro-caption');
+  captionEl.textContent = INTRO_SLIDES[i].caption;
+  // Retrigger the fade-in animation for the new caption.
+  captionEl.style.animation = 'none';
+  void captionEl.offsetWidth;
+  captionEl.style.animation = '';
+  document.querySelectorAll('.intro-dot').forEach((d, idx) => d.classList.toggle('on', idx === i));
+
+  stopIntroVoice();
+  const voice = new Audio(`/audio/narrator_${i + 1}.mp3`);
+  voice.volume = 0.95;
+  introVoice = voice;
+  voice.addEventListener('ended', () => {
+    if (introVoice === voice && introState && introState.slide === i) {
+      introState.advanceAt = performance.now() + 700;
+    }
+  }, { once: true });
+  const fallback = () => {
+    if (introVoice === voice && introState && introState.slide === i) {
+      introState.advanceAt = introState.slideStart + 4600;
+    }
+  };
+  voice.addEventListener('error', fallback, { once: true });
+  voice.play().catch(fallback);
+}
+
+function introLoop() {
+  if (!introState) return;
+  const nowMs = performance.now();
+  if (nowMs >= introState.advanceAt) {
+    if (introState.slide >= INTRO_SLIDES.length - 1) return finishIntro();
+    setIntroSlide(introState.slide + 1);
+  }
+  if (introCanvas.width !== window.innerWidth || introCanvas.height !== window.innerHeight) {
+    introCanvas.width = window.innerWidth;
+    introCanvas.height = window.innerHeight;
+  }
+  const w = introCanvas.width, h = introCanvas.height;
+  const dt = Math.min(0.05, (nowMs - (introState.lastFrame || nowMs)) / 1000);
+  introState.lastFrame = nowMs;
+  introCtx.imageSmoothingEnabled = false;
+  introCtx.fillStyle = '#050303';
+  introCtx.fillRect(0, 0, w, h);
+  // Camera shake from in-scene explosions, decaying between hits.
+  introCtx.save();
+  if (introFx.shake > 0) {
+    introCtx.translate((Math.random() * 2 - 1) * introFx.shake * 0.4, (Math.random() * 2 - 1) * introFx.shake * 0.4);
+    introFx.shake = Math.max(0, introFx.shake - dt * 26);
+  }
+  INTRO_SLIDES[introState.slide].draw(introCtx, w, h, (nowMs - introState.slideStart) / 1000, dt);
+  introCtx.restore();
+  // Cinematic letterbox bars over everything.
+  const bar = Math.round(h * 0.085);
+  introCtx.fillStyle = '#000';
+  introCtx.fillRect(0, 0, w, bar);
+  introCtx.fillRect(0, h - bar, w, bar);
+  introState.raf = requestAnimationFrame(introLoop);
+}
+
+function finishIntro() {
+  hasSeenIntro = true;
+  if (introState) cancelAnimationFrame(introState.raf);
+  introState = null;
+  stopIntroVoice();
+  introScreen.classList.add('hidden');
+  if (!hasSeenHowToPlay) {
+    howtoScreen.classList.remove('hidden');
+  } else {
+    goFullscreenOnMobile();
+    startGame();
+  }
+}
+
+document.getElementById('intro-skip').addEventListener('click', (e) => {
+  e.stopPropagation();
+  finishIntro();
+});
+
+introScreen.addEventListener('click', () => {
+  if (!introState) return;
+  if (introState.slide >= INTRO_SLIDES.length - 1) finishIntro();
+  else setIntroSlide(introState.slide + 1);
+});
+
+window.addEventListener('keydown', (e) => {
+  if (introState && e.key === 'Escape') finishIntro();
 });
 
 function resizeCanvas() {
@@ -110,6 +667,8 @@ const state = {
   hitstop: 0,
   wave: 1,
   waveTime: 0,
+  waveQuota: 0,
+  waveSpawned: 0,
   waveBanner: { text: '', elapsed: 0, duration: 2.0, active: false },
   spawnPausedUntil: 0,
   weaponPickups: [],
@@ -122,6 +681,7 @@ const state = {
   healthPickups: [],
   healthSchedule: [],
   shieldAbility: { cooldownUntil: 0 },
+  mineAbility: { cooldownUntil: 0 },
   bgTier: 1,
   bgTransition: null,
   lastMoveAngle: 0,
@@ -140,6 +700,14 @@ const state = {
   defenderCooldowns: { gunner: 0, sniper: 0, bomber: 0, voltage: 0 },
   voltArcs: [],
   mines: [],
+  // Per-run stats surfaced on the game-over screen.
+  stats: { kills: 0, bosses: 0, bestStreak: 0, startedAt: 0 },
+  // Which enemy type landed the most recent hit on the player - whoever's
+  // name is here when hp hits 0 gets the "SLAIN BY" card.
+  lastHitBy: null,
+  // Chat's Verdict - per-viewer tallies of helpful vs hostile events, used
+  // to crown the run's CHAT GUARDIAN and CHAT SABOTEUR on the death screen.
+  chatReport: { byViewer: {} },
 };
 
 // 20s of invulnerability needs a cooldown comfortably longer than the
@@ -531,17 +1099,32 @@ const WEAPON_DEFS = {
   // that pierces every enemy in its path, trading fire rate for a huge
   // single-press hit against a lined-up crowd.
   laser: { color: '#ff4dff', fireRate: 480, damage: 3, mode: 'laser' },
-  // Mine - clicking PLANTS a proximity bomb at the player's feet instead of
-  // firing a projectile. Mines arm after a short delay, blow when an enemy
-  // wanders close (or when their fuse runs out), and stay planted even after
-  // the weapon pickup itself expires - area denial you shape yourself.
-  mine: { color: '#d8dee8', fireRate: 400, damage: 3, mode: 'mine' },
 };
-const PICKUP_WEAPON_TYPES = ['spread', 'rapid', 'electric', 'ricochet', 'shotgun', 'rocket', 'flamethrower', 'ice', 'poison', 'laser', 'mine'];
+const PICKUP_WEAPON_TYPES = ['spread', 'rapid', 'electric', 'ricochet', 'shotgun', 'rocket', 'flamethrower', 'ice', 'poison', 'laser'];
+
+// Mines are NOT a weapon pickup - they're a standing player ability (like the
+// Shift shield): press E or M (or the mobile mine button) to plant a
+// proximity bomb at your feet, one every MINE_ABILITY_COOLDOWN. Mines arm
+// after a short delay, blow when an enemy wanders close or their fuse runs
+// out.
 const MAX_MINES = 6;
+const MINE_ABILITY_COOLDOWN = 10000;
 const WEAPON_DURATION_MS = 15000;
 
+// Waves are kill-gated: each wave has a quota of enemies that trickle in at
+// the normal spawn pacing, and the wave ends only when the quota is fully
+// spawned AND the arena is clear - everything must die, including extras
+// chat threw in. WAVE_DURATION survives only to pace health-pickup drops
+// within a wave.
 const WAVE_DURATION = 30;
+
+function waveQuotaFor(wave) {
+  let quota = Math.min(30, 8 + wave * 2);
+  // Danger waves trade crowd size for per-enemy toughness, so their quota
+  // shrinks to match - fewer, meaner.
+  if (isDangerWave(wave)) quota = Math.max(5, Math.round(quota * 0.7));
+  return quota;
+}
 // Hard ceiling on concurrent enemies - see the guard at the top of
 // spawnEnemy(). Generous relative to normal play (typical fights run well
 // under this) but stops a chat-spam burst (a pile of !spawn messages, a huge
@@ -578,7 +1161,15 @@ function advanceWave() {
     danger,
   };
   state.spawnPausedUntil = performance.now() + 2000;
-  if (state.wave % 5 === 0) spawnWaveBossPack();
+  state.waveQuota = waveQuotaFor(state.wave);
+  state.waveSpawned = 0;
+  // Boss packs are part of the wave's kill quota, so count what actually
+  // spawned (the MAX_ENEMIES cap can trim the pack).
+  if (state.wave % 5 === 0) {
+    const before = state.enemies.length;
+    spawnWaveBossPack();
+    state.waveSpawned += state.enemies.length - before;
+  }
   scheduleHealthPickups();
   checkBackgroundTier();
   updateHud();
@@ -653,6 +1244,8 @@ function resetState() {
   state.hitstop = 0;
   state.wave = 1;
   state.waveTime = 0;
+  state.waveQuota = waveQuotaFor(1);
+  state.waveSpawned = 0;
   state.waveBanner = { text: '', elapsed: 0, duration: 2.0, active: false };
   state.spawnPausedUntil = 0;
   state.weaponPickups = [];
@@ -665,6 +1258,7 @@ function resetState() {
   state.healthPickups = [];
   scheduleHealthPickups();
   state.shieldAbility = { cooldownUntil: 0 };
+  state.mineAbility = { cooldownUntil: 0 };
   state.bgTier = 1;
   state.bgTransition = null;
   state.lastMoveAngle = 0;
@@ -677,6 +1271,10 @@ function resetState() {
   state.defenderCooldowns = { gunner: 0, sniper: 0, bomber: 0, voltage: 0 };
   state.voltArcs = [];
   state.mines = [];
+  state.stats = { kills: 0, bosses: 0, bestStreak: 0, startedAt: performance.now() };
+  state.lastHitBy = null;
+  state.chatReport = { byViewer: {} };
+  clearGameOverVoices();
   lastLineIndex = {};
   lastSpeechBubbleAt = 0;
   lastTauntBySender = {};
@@ -755,6 +1353,7 @@ window.addEventListener('keydown', (e) => (state.keys[e.key.toLowerCase()] = tru
 window.addEventListener('keyup', (e) => (state.keys[e.key.toLowerCase()] = false));
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Shift' && !e.repeat) tryActivateShieldAbility();
+  if ((e.key.toLowerCase() === 'e' || e.key.toLowerCase() === 'm') && !e.repeat) tryPlantMine();
 });
 canvas.addEventListener('mousemove', (e) => {
   state.mouse.x = e.clientX;
@@ -850,6 +1449,12 @@ function setupMobileControls() {
     e.preventDefault();
     tryActivateShieldAbility();
   }, { passive: false });
+
+  const mineBtn = document.getElementById('mine-btn');
+  mineBtn.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    tryPlantMine();
+  }, { passive: false });
 }
 setupMobileControls();
 
@@ -886,19 +1491,23 @@ function handleBlazeEvent(type, payload) {
         spawnEnemy();
         pushTicker(name, 'threw in another enemy', true);
         nudgeTension(0.05);
+        reportChat(name, 'chaos');
       } else if (text.startsWith('!heal')) {
         state.player.hp = Math.min(state.player.maxHp, state.player.hp + 20);
         pushTicker(name, 'healed you +20 HP', true);
         updateHud();
         nudgeTension(-0.06);
+        reportChat(name, 'help');
       } else if (text.startsWith('!shield')) {
         applyShield(3000);
         pushTicker(name, 'granted 3s shield', true);
         nudgeTension(-0.05);
+        reportChat(name, 'help');
       } else if (text.startsWith('!slow')) {
         state.slowUntil = performance.now() + 5000;
         pushTicker(name, 'slowed every enemy', true);
         nudgeTension(-0.05);
+        reportChat(name, 'help');
       } else if (text.startsWith('!testtip')) {
         // TEST-ONLY DEBUG SHORTCUT: simulates a channel.thanks (tip) event
         // locally, since real on-chain tips are hard to trigger on demand
@@ -924,6 +1533,7 @@ function handleBlazeEvent(type, payload) {
       spawnAlly();
       pushTicker(name, 'followed - ally deployed!', true);
       nudgeTension(-0.08);
+      reportChat(name, 'help');
       break;
     }
     case 'channel.subscribe': {
@@ -931,6 +1541,7 @@ function handleBlazeEvent(type, payload) {
       triggerBossWave(name);
       pushTicker(name, 'subscribed - boss wave incoming!', true);
       nudgeTension(0.15);
+      reportChat(name, 'chaos');
       break;
     }
     case 'channel.subscription.gift': {
@@ -942,6 +1553,7 @@ function handleBlazeEvent(type, payload) {
       triggerBossWave(name, hpMul);
       pushTicker(name, `gifted ${payload.giftCount || ''} subs - boss wave!`, true);
       nudgeTension(0.15 + Math.min(0.15, giftCount * 0.01));
+      reportChat(name, 'chaos');
       break;
     }
     case 'channel.vote': {
@@ -952,6 +1564,7 @@ function handleBlazeEvent(type, payload) {
       triggerShake(6 + count);
       pushTicker(name, `voted ${amount} - horde of ${count} summoned`, true);
       nudgeTension(Math.min(0.15, count * 0.02));
+      reportChat(name, 'chaos');
       break;
     }
   }
@@ -973,15 +1586,18 @@ function handleTip(name, amount) {
     state.waveBanner = { text: `MEGA TIP - ${name}!`, elapsed: 0, duration: 2.6, active: true };
     pushTicker(name, `tipped ${amount} - MEGA TIP! Boss wave!`, true);
     nudgeTension(0.2);
+    reportChat(name, 'chaos');
   } else if (amount >= TIP_TIER_MEDIUM) {
     state.weapon = 'electric';
     state.weaponUntil = performance.now() + WEAPON_DURATION_MS;
     pushTicker(name, `tipped ${amount} - electric gun unlocked for 15s!`, true);
     nudgeTension(-0.08);
+    reportChat(name, 'help');
   } else {
     spawnEnemy(false, 'loot');
     pushTicker(name, `tipped ${amount} - bonus loot enemy incoming!`, true);
     nudgeTension(-0.04);
+    reportChat(name, 'help');
   }
 }
 
@@ -1352,9 +1968,17 @@ function tryPlayerLine(poolName, duration = 1.8) {
   return trySpawnSpeechBubble(state.player, text, { duration, isPlayer: true, borderColor: '#F0B90B', playerPool: poolName });
 }
 
-function onPlayerDamaged() {
+function onPlayerDamaged(srcType) {
   state.killStreak = 0;
+  if (srcType) state.lastHitBy = srcType;
   GameAudio.playPlayerHit();
+}
+
+// Chat's Verdict bookkeeping - every chat-driven effect files under the
+// viewer who sent it, as either help or chaos. Read back in gameOver().
+function reportChat(name, kind) {
+  const v = (state.chatReport.byViewer[name] = state.chatReport.byViewer[name] || { help: 0, chaos: 0 });
+  v[kind] += 1;
 }
 
 function spawnEnemy(boss = false, forcedType = null, extra = {}) {
@@ -1618,6 +2242,37 @@ function applyShield(ms) {
   p.shieldUntil = Math.max(p.shieldUntil || 0, performance.now() + ms);
 }
 
+function tryPlantMine() {
+  if (!state.running || state.paused) return;
+  const nowMs = performance.now();
+  if (nowMs < state.mineAbility.cooldownUntil) return;
+  // Planting past the cap detonates the OLDEST mine where it sits - the
+  // field never silently swallows a plant.
+  if (state.mines.length >= MAX_MINES) {
+    const oldest = state.mines.shift();
+    explodeAt(oldest.x, oldest.y, 110, 3);
+  }
+  state.mines.push({ x: state.player.x, y: state.player.y, armAt: nowMs + 400, expiresAt: nowMs + 8000 });
+  state.mineAbility.cooldownUntil = nowMs + MINE_ABILITY_COOLDOWN;
+  spawnParticles(state.player.x, state.player.y, '#d8dee8');
+}
+
+function updateMineHud() {
+  const badge = document.getElementById('mine-badge');
+  const mineBtn = document.getElementById('mine-btn');
+  const remaining = state.mineAbility.cooldownUntil - performance.now();
+  const ready = remaining <= 0;
+
+  badge.textContent = ready ? 'MINE READY' : 'MINE ' + Math.ceil(remaining / 1000) + 's';
+  badge.classList.toggle('ready', ready);
+  badge.classList.toggle('cooldown', !ready);
+
+  if (isTouchDevice) {
+    mineBtn.classList.toggle('ready', ready);
+    mineBtn.classList.toggle('cooldown', !ready);
+  }
+}
+
 function tryActivateShieldAbility() {
   const now = performance.now();
   if (now < state.shieldAbility.cooldownUntil) return;
@@ -1755,6 +2410,7 @@ function update(dt, now) {
   // applyShield) so the chat command and the Shift ability can coexist.
   p.shielded = now < p.shieldUntil;
   updateShieldHud();
+  updateMineHud();
 
   // The run's "story clock" - wave timer, wave-transition banner, background
   // tier cross-fade, and health-pickup scheduling - keeps advancing through a
@@ -1762,7 +2418,13 @@ function update(dt, now) {
   // point actually pauses, so a flurry of kills (each triggering hitstop)
   // can't silently stretch out a wave's real duration.
   state.waveTime += dt;
-  if (state.waveTime >= WAVE_DURATION) {
+  // Kill-gated wave completion: the full quota must have spawned AND the
+  // arena must be empty - chat-spawned extras count, so "kill everything"
+  // always means everything. A cleared wave pays a score bonus.
+  if (state.waveSpawned >= state.waveQuota && state.enemies.length === 0 && now > state.spawnPausedUntil) {
+    const bonus = state.wave * 25;
+    state.score += bonus;
+    pushTicker(`WAVE ${state.wave}`, `cleared - +${bonus} bonus!`, true);
     advanceWave();
   }
   if (state.waveBanner.active) {
@@ -1794,6 +2456,8 @@ function update(dt, now) {
   updateTensionHud();
   // Cooldown countdowns keep ticking on the HUD even through hitstop frames.
   updateDefenderHud();
+  // Per-frame so the wave kill counter tracks spawns, not just kills.
+  updateHud();
 
   // Hitstop: freeze movement/collision/AI for a few real milliseconds on an
   // impactful hit. Input keeps being captured by the listeners above (they
@@ -1944,15 +2608,6 @@ function update(dt, now) {
           r: 5, life: 0.4, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
           hitSet: new Set(),
         });
-      } else if (weaponDef.mode === 'mine') {
-        // Plant at the player's feet rather than firing toward the aim
-        // point. Planting past the cap detonates the OLDEST mine where it
-        // sits - the field never silently swallows a plant.
-        if (state.mines.length >= MAX_MINES) {
-          const oldest = state.mines.shift();
-          explodeAt(oldest.x, oldest.y, 110, 3);
-        }
-        state.mines.push({ x: p.x, y: p.y, armAt: now + 400, expiresAt: now + 8000 });
       } else {
         state.bullets.push({
           x: p.x, y: p.y, vx: Math.cos(angle) * 620, vy: Math.sin(angle) * 620,
@@ -2026,16 +2681,20 @@ function update(dt, now) {
     return true;
   });
 
-  // Passive enemy spawn so the game has a baseline pace even in a quiet chat.
-  // Paused briefly during the wave banner so the transition reads clearly.
+  // Wave-quota spawner - trickles the wave's enemies in at the normal
+  // pacing, stopping once the quota is fully deployed (chat spawns are
+  // extras on top and never consume quota). Paused briefly during the wave
+  // banner so the transition reads clearly.
   state.spawnTimer -= dt;
-  if (state.spawnTimer <= 0 && now > state.spawnPausedUntil) {
+  if (state.spawnTimer <= 0 && now > state.spawnPausedUntil && state.waveSpawned < state.waveQuota) {
+    const before = state.enemies.length;
     const type = pickEnemyType();
     if (type === 'swarmer') {
       spawnSwarmerCluster();
     } else {
       spawnEnemy(false, type);
     }
+    state.waveSpawned += state.enemies.length - before;
     state.spawnTimer = currentSpawnInterval();
   }
 
@@ -2084,7 +2743,7 @@ function update(dt, now) {
         state.enemyProjectiles.push({
           x: e.x, y: e.y,
           vx: Math.cos(idealAngle) * 180, vy: Math.sin(idealAngle) * 180,
-          r: 5, life: 4,
+          r: 5, life: 4, srcType: 'sniper',
         });
       }
     } else if (e.type === 'brute') {
@@ -2107,7 +2766,7 @@ function update(dt, now) {
         state.enemyProjectiles.push({
           x: e.x, y: e.y,
           vx: Math.cos(idealAngle) * 140, vy: Math.sin(idealAngle) * 140,
-          r: 8, life: 5, damage: 20,
+          r: 8, life: 5, damage: 20, srcType: 'brute',
         });
       }
     } else if (e.type === 'dasher') {
@@ -2161,7 +2820,7 @@ function update(dt, now) {
           x: e.x, y: e.y,
           vx: Math.cos(idealAngle) * cfg.projSpeed, vy: Math.sin(idealAngle) * cfg.projSpeed,
           r: cfg.projR, life: cfg.kind === 'grenade' ? 1.2 + Math.random() * 0.3 : (cfg.life || 5),
-          damage: cfg.damage, color: cfg.color, kind: cfg.kind,
+          damage: cfg.damage, color: cfg.color, kind: cfg.kind, srcType: e.type,
           status: cfg.status, statusDur: cfg.statusDur, statusDps: cfg.statusDps, slowMul: cfg.slowMul,
           hazard: cfg.hazard, hazardR: cfg.hazardR, hazardDur: cfg.hazardDur,
           splash: cfg.splash, homing: cfg.homing,
@@ -2185,7 +2844,7 @@ function update(dt, now) {
       if (!p.shielded) {
         p.hp -= (e.boss ? 25 : 10) * playerDamageMul();
         updateHud();
-        onPlayerDamaged();
+        onPlayerDamaged(e.type);
         spawnParticles(p.x, p.y, '#ff3d7f');
         triggerShake(e.boss ? 14 : 7);
         applyKnockback(p, Math.atan2(p.y - e.y, p.x - e.x), 200);
@@ -2245,7 +2904,7 @@ function update(dt, now) {
     if (inSplash && !p.shielded) {
       p.hp -= (pr.damage || 8) * playerDamageMul();
       updateHud();
-      onPlayerDamaged();
+      onPlayerDamaged(pr.srcType);
       spawnParticles(p.x, p.y, pr.color || (pr.damage ? '#ff4d4d' : '#8b5cf6'));
       triggerShake(pr.damage ? 10 : 6);
       applyKnockback(p, Math.atan2(pr.vy, pr.vx), pr.damage ? 200 : 120);
@@ -2260,7 +2919,7 @@ function update(dt, now) {
       if (p.hp <= 0) return gameOver();
     }
     if (pr.hazard) {
-      state.hazards.push({ x: pr.x, y: pr.y, r: pr.hazardR, expiresAt: performance.now() + pr.hazardDur, dps: pr.statusDps || 3, color: pr.color });
+      state.hazards.push({ x: pr.x, y: pr.y, r: pr.hazardR, expiresAt: performance.now() + pr.hazardDur, dps: pr.statusDps || 3, color: pr.color, srcType: pr.srcType });
     }
     if (pr.kind === 'grenade') {
       spawnParticles(pr.x, pr.y, pr.color || '#ffb020');
@@ -2277,6 +2936,7 @@ function update(dt, now) {
     if (performance.now() > hz.expiresAt) return false;
     if (!p.shielded && dist(hz, p) < hz.r + p.r) {
       p.hp -= hz.dps * dt * playerDamageMul();
+      if (hz.srcType) state.lastHitBy = hz.srcType;
       updateHud();
       if (Math.random() < 0.12) spawnParticles(p.x, p.y, hz.color || '#7cff3d');
       if (p.hp <= 0) hazardKilledPlayer = true;
@@ -2376,6 +3036,9 @@ function update(dt, now) {
     // damage taken - a reward for focusing what the defender called out.
     state.score += enemyMarkMul(e) > 1 ? Math.round(e.score * 1.5) : e.score;
     state.killStreak += 1;
+    state.stats.kills += 1;
+    if (e.boss) state.stats.bosses += 1;
+    state.stats.bestStreak = Math.max(state.stats.bestStreak, state.killStreak);
 
     // Boss kills always get a guaranteed line - a bigger, rarer payoff moment
     // that outranks even a streak milestone landing on the same kill. Streak
@@ -2991,7 +3654,61 @@ function updateHud() {
   document.getElementById('health-fill').style.width = pct + '%';
   document.getElementById('health-text').textContent = `${Math.max(0, Math.round(p.hp))} HP`;
   document.getElementById('score').textContent = state.score;
-  document.getElementById('wave-badge').textContent = 'WAVE ' + state.wave;
+  // Live kill counter: unspawned quota + everything currently alive (chat
+  // extras included) - the number that must reach 0 to clear the wave.
+  const toKill = Math.max(0, state.waveQuota - state.waveSpawned) + state.enemies.length;
+  document.getElementById('wave-badge').textContent = `WAVE ${state.wave} · ${toKill} LEFT`;
+}
+
+// Narrator eulogies for the death screen - same plain-strings shape as
+// INTRO_NARRATION so scripts/generate-voices.js can extract them and
+// pre-generate epitaph_N.mp3 in the narrator's deep, slow voice.
+const GAMEOVER_EPITAPHS = {
+  lines: [
+    'The line broke. The fire moved on.',
+    'Another name for the ash. Another wave for the horde.',
+    'They held longer than most. The plains will remember.',
+    'The voices fell silent. The arena did not.',
+    'Rest now, fighter. The blaze burns on without you.',
+  ],
+};
+
+// Death-screen audio (killer taunt + narrator epitaph) is scheduled on
+// timeouts so it doesn't collide with the game-over jingle - all of it is
+// cancelled if the player restarts before it plays out.
+let goTimeouts = [];
+let goAudio = null;
+function clearGameOverVoices() {
+  goTimeouts.forEach(clearTimeout);
+  goTimeouts = [];
+  if (goAudio) {
+    goAudio.pause();
+    goAudio = null;
+  }
+}
+
+// Letter grade for the run, action-game style. Thresholds are tuned so a
+// first casual run lands C/B and the top grades genuinely take work.
+function scoreRank(score) {
+  if (score >= 6000) return { letter: 'SS', color: '#ff3d7f' };
+  if (score >= 3000) return { letter: 'S', color: '#F0B90B' };
+  if (score >= 1600) return { letter: 'A', color: '#38e8d4' };
+  if (score >= 800) return { letter: 'B', color: '#7cff3d' };
+  if (score >= 300) return { letter: 'C', color: '#8a8f9a' };
+  return { letter: 'D', color: '#5a5f6a' };
+}
+
+// Rolls the displayed score up from 0 with an ease-out - the classic
+// post-game count-up beat.
+function animateScoreCountUp(el, target) {
+  const dur = 1200;
+  const start = performance.now();
+  (function tick() {
+    const p = Math.min(1, (performance.now() - start) / dur);
+    const eased = 1 - Math.pow(1 - p, 3);
+    el.textContent = Math.round(target * eased);
+    if (p < 1) requestAnimationFrame(tick);
+  })();
 }
 
 async function gameOver() {
@@ -3002,7 +3719,79 @@ async function gameOver() {
   GameAudio.playGameOver();
   gameScreen.classList.add('hidden');
   gameOverScreen.classList.remove('hidden');
-  document.getElementById('final-score').textContent = `Score: ${state.score}`;
+
+  // Run stats.
+  const stats = state.stats;
+  const secs = Math.max(0, Math.floor((performance.now() - stats.startedAt) / 1000));
+  document.getElementById('gs-wave').textContent = state.wave;
+  document.getElementById('gs-kills').textContent = stats.kills;
+  document.getElementById('gs-streak').textContent = stats.bestStreak;
+  document.getElementById('gs-bosses').textContent = stats.bosses;
+  document.getElementById('gs-time').textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+
+  // SLAIN BY - name and sprite of whatever landed the killing blow, plus a
+  // spoken taunt in that enemy's own voice.
+  const killer = state.lastHitBy || 'boss';
+  document.getElementById('go-killer-name').textContent = killer === 'boss' ? 'THE WARLORD' : killer.toUpperCase();
+  const kc = document.getElementById('go-killer-canvas');
+  const kctx = kc.getContext('2d');
+  kctx.imageSmoothingEnabled = false;
+  kctx.clearRect(0, 0, kc.width, kc.height);
+  kctx.drawImage(SPRITES[killer] || SPRITES.enemy, 4, 4, kc.width - 8, kc.height - 8);
+  const tauntPool = ENEMY_AUDIO[killer]?.aggro;
+  if (tauntPool) {
+    const urls = Object.values(tauntPool);
+    goTimeouts.push(setTimeout(() => GameAudio.playVoiceLine(urls[Math.floor(Math.random() * urls.length)], true), 700));
+  }
+
+  // Narrator epitaph - shown as text immediately, spoken after the killer's
+  // taunt has had room to land.
+  const ei = Math.floor(Math.random() * GAMEOVER_EPITAPHS.lines.length);
+  document.getElementById('go-epitaph').textContent = `"${GAMEOVER_EPITAPHS.lines[ei]}"`;
+  goTimeouts.push(setTimeout(() => {
+    goAudio = new Audio(`/audio/epitaph_${ei + 1}.mp3`);
+    goAudio.volume = 0.95;
+    goAudio.play().catch(() => {});
+  }, 2800));
+
+  // Chat's Verdict - crown the run's most helpful and most hostile viewers.
+  const byViewer = state.chatReport.byViewer;
+  let guardian = null, saboteur = null;
+  Object.entries(byViewer).forEach(([name, v]) => {
+    if (v.help > 0 && (!guardian || v.help > byViewer[guardian].help)) guardian = name;
+    if (v.chaos > 0 && (!saboteur || v.chaos > byViewer[saboteur].chaos)) saboteur = name;
+  });
+  const verdictEl = document.getElementById('go-verdict');
+  verdictEl.classList.toggle('hidden', !guardian && !saboteur);
+  document.getElementById('ga-guardian').textContent = guardian || 'nobody';
+  document.getElementById('ga-guardian-n').textContent = guardian ? `${byViewer[guardian].help} assists` : 'chat left you to die';
+  document.getElementById('ga-saboteur').textContent = saboteur || 'nobody';
+  document.getElementById('ga-saboteur-n').textContent = saboteur ? `${byViewer[saboteur].chaos} attacks` : 'a peaceful chat';
+
+  // Letter grade + score count-up.
+  const rank = scoreRank(state.score);
+  const rankEl = document.getElementById('go-rank');
+  rankEl.textContent = rank.letter;
+  rankEl.style.color = rank.color;
+  rankEl.style.borderColor = rank.color;
+  rankEl.style.textShadow = `0 0 18px ${rank.color}`;
+  // Retrigger the stamp-in animation on every death, not just the first.
+  rankEl.style.animation = 'none';
+  void rankEl.offsetWidth;
+  rankEl.style.animation = '';
+  animateScoreCountUp(document.getElementById('final-score'), state.score);
+
+  // Personal best, tracked per Blaze account in this browser.
+  const bestKey = `fotb_best_${me?.username || 'anon'}`;
+  const prevBest = Number(localStorage.getItem(bestKey) || 0);
+  if (state.score > prevBest) localStorage.setItem(bestKey, String(state.score));
+  // Only celebrate beating a real previous record - a first run is always
+  // technically a "best" and announcing it just looks silly.
+  const isNewBest = prevBest > 0 && state.score > prevBest;
+  document.getElementById('go-newbest').classList.toggle('hidden', !isNewBest);
+
+  const placeEl = document.getElementById('go-place');
+  placeEl.classList.add('hidden');
 
   try {
     const res = await fetch('/api/leaderboard', {
@@ -3010,7 +3799,11 @@ async function gameOver() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ score: state.score }),
     });
-    const { top10 } = await res.json();
+    const { top10, rank: place } = await res.json();
+    if (place) {
+      placeEl.textContent = `You placed #${place}`;
+      placeEl.classList.remove('hidden');
+    }
     renderLeaderboard(top10);
   } catch {
     renderLeaderboard([]);
@@ -3019,11 +3812,17 @@ async function gameOver() {
 
 function renderLeaderboard(entries) {
   const el = document.getElementById('leaderboard');
-  el.innerHTML = '<div class="hud-label" style="margin-bottom:8px;">LEADERBOARD</div>';
-  entries.forEach((e) => {
+  el.innerHTML = '<div class="hud-label" style="margin-bottom:10px;">HALL OF FLAME</div>';
+  entries.forEach((e, i) => {
     const row = document.createElement('div');
-    row.className = 'lb-row' + (e.displayName === me?.displayName ? ' me' : '');
-    row.innerHTML = `<span>${escapeHtml(e.displayName)}</span><span>${e.score}</span>`;
+    const isMe = e.displayName === me?.displayName;
+    row.className = 'lb-row' + (isMe ? ' me' : '') + (i < 3 ? ` top${i + 1}` : '');
+    row.style.setProperty('--i', i);
+    row.innerHTML =
+      `<span class="lb-rank">${i + 1}</span>` +
+      `<img class="lb-avatar" src="${escapeHtml(e.avatarUrl || '')}" alt="" onerror="this.style.visibility='hidden'" />` +
+      `<span class="lb-name">${escapeHtml(e.displayName)}${isMe ? ' <b>YOU</b>' : ''}</span>` +
+      `<span class="lb-score">${e.score}</span>`;
     el.appendChild(row);
   });
 }

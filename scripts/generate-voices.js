@@ -68,6 +68,10 @@ const VOICES = {
   frostguard: { id: 'nPczCjzI2devNBz1zQrb', pitchFactor: 0.6, settings: { stability: 0.65, similarity_boost: 0.85, style: 0.4, speed: 0.78 } },
   plague: { id: 'FGY2WhTYpPnrIDTdsKH5', pitchFactor: 0.85, settings: { stability: 0.4, similarity_boost: 0.8, style: 0.7, speed: 0.9 } },
   inferno: { id: 'nPczCjzI2devNBz1zQrb', pitchFactor: 0.65, settings: { stability: 0.6, similarity_boost: 0.85, style: 0.55, speed: 0.8 } },
+  // Intro narrator - Brian again, but kept HUMAN this time: barely any pitch
+  // shift (the toony treatment is for characters, not the storyteller),
+  // high stability, and a slow, deliberate read for movie-trailer gravitas.
+  narrator: { id: 'nPczCjzI2devNBz1zQrb', pitchFactor: 0.94, settings: { stability: 0.75, similarity_boost: 0.85, style: 0.35, speed: 0.82 } },
 };
 
 // The classic "tape speed" pitch-shift: resampling at a different rate
@@ -144,6 +148,26 @@ function buildJobs() {
         text,
         voice: VOICES.player,
       });
+    });
+  });
+
+  // Intro story narration - one file per slide, read by the narrator voice.
+  const INTRO_NARRATION = extractConst(source, 'INTRO_NARRATION');
+  INTRO_NARRATION.lines.forEach((text, i) => {
+    jobs.push({
+      file: `narrator_${i + 1}.mp3`,
+      text,
+      voice: VOICES.narrator,
+    });
+  });
+
+  // Death-screen epitaphs - same narrator, one file per eulogy line.
+  const GAMEOVER_EPITAPHS = extractConst(source, 'GAMEOVER_EPITAPHS');
+  GAMEOVER_EPITAPHS.lines.forEach((text, i) => {
+    jobs.push({
+      file: `epitaph_${i + 1}.mp3`,
+      text,
+      voice: VOICES.narrator,
     });
   });
 

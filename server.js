@@ -61,24 +61,42 @@ function writeLeaderboard(entries) {
   fs.writeFileSync(LEADERBOARD_FILE, JSON.stringify(entries, null, 2));
 }
 
+// One row per player - the board shows each player's best run, not a wall
+// of one prolific player's attempts. Assumes the input is sorted desc.
+function dedupeBoard(board) {
+  const seen = new Set();
+  const rows = [];
+  for (const e of board) {
+    if (seen.has(e.displayName)) continue;
+    seen.add(e.displayName);
+    rows.push(e);
+  }
+  return rows;
+}
+
 function submitScore(displayName, avatarUrl, score) {
   const board = readLeaderboard();
   board.push({ displayName, avatarUrl, score, at: new Date().toISOString() });
   board.sort((a, b) => b.score - a.score);
-  writeLeaderboard(board.slice(0, 25));
-  return board.slice(0, 10);
+  writeLeaderboard(board.slice(0, 50));
+  // Placement is the player's standing among players (dedeuped by best
+  // run), so "you placed #3" means third-best player, not third-best run.
+  const unique = dedupeBoard(board);
+  const rank = unique.findIndex((e) => e.displayName === displayName) + 1;
+  return { top10: unique.slice(0, 10), rank };
 }
 
 app.get('/api/leaderboard', (req, res) => {
-  res.json(readLeaderboard().slice(0, 10));
+  const board = readLeaderboard().sort((a, b) => b.score - a.score);
+  res.json(dedupeBoard(board).slice(0, 10));
 });
 
 app.post('/api/leaderboard', (req, res) => {
   const { score } = req.body;
   if (!req.session.blaze) return res.status(401).json({ error: 'not logged in' });
   if (typeof score !== 'number') return res.status(400).json({ error: 'score required' });
-  const top10 = submitScore(req.session.blaze.displayName, req.session.blaze.avatarUrl, score);
-  res.json({ top10 });
+  const { top10, rank } = submitScore(req.session.blaze.displayName, req.session.blaze.avatarUrl, score);
+  res.json({ top10, rank });
 });
 
 // ---------------------------------------------------------------------------

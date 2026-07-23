@@ -99,6 +99,14 @@
   </div>
 </div>
 
+<div id="intro-screen" class="screen hidden">
+  <canvas id="intro-canvas"></canvas>
+  <div id="intro-caption" class="intro-caption"></div>
+  <div id="intro-dots" class="intro-dots"></div>
+  <button id="intro-skip" class="intro-skip">SKIP &#9654;</button>
+  <div class="intro-hint">click anywhere to continue</div>
+</div>
+
 <div id="howto-screen" class="screen hidden">
   <div class="login-card">
     <div class="brand"><span class="brand-mark">◆</span><span class="brand-name">HOW TO PLAY</span></div>
@@ -106,6 +114,7 @@
       <div class="rule"><span class="tag">Move</span> WASD or arrow keys (drag the on-screen joystick on mobile)</div>
       <div class="rule"><span class="tag">Aim & Shoot</span> point with the mouse, click and hold to fire (auto-aims on mobile - use the shoot button)</div>
       <div class="rule"><span class="tag">Shield</span> Shift key for a brief invincibility window, on a cooldown (or the shield button on mobile)</div>
+      <div class="rule"><span class="tag">Mine</span> E or M plants a proximity bomb at your feet (or the mine button on mobile) - one every 10s, up to 6 on the field</div>
       <div class="rule"><span class="tag">Defenders</span> keys 1-4 (or tap their slots) summon a backup fighter for 15s - each has its own weapon, a one-shot power on arrival, and its own long cooldown</div>
       <div class="rule"><span class="tag">Pause</span> Esc or P</div>
       <div class="rule"><span class="tag">Chat</span> your live Blaze chat is the game master - !spawn, !heal, !shield, !slow, !taunt, follows, subs, votes, and tips all affect the run in real time</div>
@@ -146,6 +155,7 @@
     <div class="weapon-bar-track"><div id="weapon-bar" class="weapon-bar-fill"></div></div>
   </div>
   <div id="shield-badge" class="pill shield-pill ready">SHIELD READY</div>
+  <div id="mine-badge" class="pill mine-pill ready">MINE READY</div>
   <div id="tension-badge" class="pill tension-pill">
     <span class="tension-label">HELP</span>
     <div class="tension-track"><div id="tension-fill" class="tension-fill"></div></div>
@@ -158,6 +168,7 @@
     </div>
     <button id="shoot-btn" class="shoot-btn" aria-label="Shoot">&#9670;</button>
     <button id="shield-btn" class="shield-btn ready" aria-label="Shield">&#9679;</button>
+    <button id="mine-btn" class="mine-btn ready" aria-label="Plant mine">&#9635;</button>
   </div>
 
   <div id="defender-bar" class="defender-bar">
@@ -180,10 +191,45 @@
   </div>
 </div>
 
-<div id="gameover-screen" class="screen hidden">
-  <div class="login-card">
+<div id="gameover-screen" class="screen war-theme hidden">
+  <div class="login-card gameover-card">
     <div class="brand"><span class="brand-mark">◆</span><span class="brand-name">RUN OVER</span></div>
-    <p class="tagline" id="final-score">Score: 0</p>
+    <p id="go-epitaph" class="go-epitaph"></p>
+    <div class="go-killer">
+      <canvas id="go-killer-canvas" width="64" height="64"></canvas>
+      <div class="go-killer-stack">
+        <label>SLAIN BY</label>
+        <span id="go-killer-name">THE HORDE</span>
+      </div>
+    </div>
+    <div class="go-scoreline">
+      <div id="go-rank" class="go-rank">D</div>
+      <div class="go-score-stack">
+        <span id="final-score" class="go-score">0</span>
+        <span class="go-score-label">SCORE</span>
+      </div>
+    </div>
+    <div id="go-newbest" class="go-newbest hidden">&#9733; NEW PERSONAL BEST &#9733;</div>
+    <div id="go-place" class="go-place hidden"></div>
+    <div class="go-stats">
+      <div class="go-stat" style="--i:0"><span id="gs-wave">1</span><label>WAVE</label></div>
+      <div class="go-stat" style="--i:1"><span id="gs-kills">0</span><label>KILLS</label></div>
+      <div class="go-stat" style="--i:2"><span id="gs-streak">0</span><label>BEST STREAK</label></div>
+      <div class="go-stat" style="--i:3"><span id="gs-bosses">0</span><label>BOSSES</label></div>
+      <div class="go-stat" style="--i:4"><span id="gs-time">0:00</span><label>SURVIVED</label></div>
+    </div>
+    <div id="go-verdict" class="go-verdict hidden">
+      <div class="go-award guardian">
+        <label>CHAT GUARDIAN</label>
+        <span id="ga-guardian">-</span>
+        <small id="ga-guardian-n"></small>
+      </div>
+      <div class="go-award saboteur">
+        <label>CHAT SABOTEUR</label>
+        <span id="ga-saboteur">-</span>
+        <small id="ga-saboteur-n"></small>
+      </div>
+    </div>
     <button id="restart-btn" class="login-btn" style="border:none;cursor:pointer;">Run it back</button>
     <div id="leaderboard" class="leaderboard"></div>
   </div>

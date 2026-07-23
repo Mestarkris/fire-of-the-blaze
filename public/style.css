@@ -470,6 +470,19 @@ html, body {
 .shield-pill.ready { border-color: var(--cyan); color: var(--cyan); }
 .shield-pill.cooldown { border-color: #2c303a; color: var(--muted); }
 
+.mine-pill {
+  left: auto;
+  right: 26px;
+  top: 220px;
+  transform: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+
+.mine-pill.ready { border-color: #d8dee8; color: #d8dee8; }
+.mine-pill.cooldown { border-color: #2c303a; color: var(--muted); }
+
 .tension-pill {
   left: auto;
   right: 26px;
@@ -510,6 +523,84 @@ html, body {
 
 .tension-pill.leaning-help .tension-label:first-child { color: var(--cyan); }
 .tension-pill.leaning-chaos .tension-label:last-child { color: var(--magenta); }
+
+/* ---------- Intro story slideshow ---------- */
+
+#intro-screen { background: #050303; cursor: pointer; }
+
+#intro-canvas { position: absolute; inset: 0; }
+
+.intro-caption {
+  position: absolute;
+  left: 50%;
+  bottom: 10.5%;
+  transform: translateX(-50%);
+  width: 90%;
+  max-width: 760px;
+  text-align: center;
+  font-family: 'Press Start 2P', var(--mono);
+  font-size: 11px;
+  line-height: 2.1;
+  color: var(--text);
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.95), 0 0 4px rgba(0, 0, 0, 0.9);
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0;
+  animation: introCaptionIn 0.7s ease 0.15s forwards;
+}
+
+@keyframes introCaptionIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+@media (max-width: 600px) {
+  .intro-caption { font-size: 9px; bottom: 12%; }
+}
+
+.intro-dots {
+  position: absolute;
+  bottom: 3.4%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 9px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.intro-dot { width: 8px; height: 8px; border-radius: 50%; background: #2c303a; }
+.intro-dot.on { background: var(--gold); }
+
+.intro-skip {
+  position: absolute;
+  top: 24px;
+  right: 26px;
+  z-index: 3;
+  background: rgba(21, 23, 28, 0.85);
+  border: 1px solid #2c303a;
+  border-radius: 999px;
+  padding: 9px 18px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.intro-skip:hover { border-color: var(--gold); color: var(--gold); }
+
+.intro-hint {
+  position: absolute;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.7;
+  z-index: 2;
+  pointer-events: none;
+}
 
 /* ---------- Defender summon slots (keys 1-4) ---------- */
 
@@ -664,6 +755,33 @@ html, body {
 
 .shield-btn.ready:active { background: rgba(56,232,212,0.5); }
 
+.mine-btn {
+  position: absolute;
+  right: 118px;
+  bottom: calc(130px + env(safe-area-inset-bottom));
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  font-size: 18px;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+}
+
+.mine-btn.ready {
+  background: rgba(216,222,232,0.2);
+  border: 2px solid #d8dee8;
+  color: #d8dee8;
+}
+
+.mine-btn.cooldown {
+  background: rgba(31,34,41,0.85);
+  border: 2px solid #2c303a;
+  color: var(--muted);
+}
+
+.mine-btn.ready:active { background: rgba(216,222,232,0.5); }
+
 .pause-overlay {
   position: absolute;
   inset: 0;
@@ -709,6 +827,211 @@ html, body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* ---------- Game over: rank, score count-up, run stats ---------- */
+
+.gameover-card {
+  max-width: 560px;
+  max-height: 92vh;
+  overflow-y: auto;
+}
+
+.go-epitaph {
+  font-family: var(--mono);
+  font-style: italic;
+  font-size: 12px;
+  color: var(--muted);
+  margin: 10px 0 4px;
+  min-height: 16px;
+}
+
+.go-killer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin: 14px 0 4px;
+}
+
+#go-killer-canvas {
+  width: 56px;
+  height: 56px;
+  image-rendering: pixelated;
+  background: #1a1d23;
+  border: 1px solid var(--magenta);
+  border-radius: 10px;
+  box-shadow: 0 0 14px rgba(255, 61, 127, 0.35);
+}
+
+.go-killer-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+
+.go-killer-stack label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--muted);
+}
+
+.go-killer-stack span {
+  font-family: 'Press Start 2P', var(--mono);
+  font-size: 14px;
+  color: var(--magenta);
+  text-shadow: 0 0 12px rgba(255, 61, 127, 0.5);
+}
+
+.go-verdict {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin: 0 0 20px;
+}
+
+.go-award {
+  flex: 1;
+  max-width: 200px;
+  background: #1a1d23;
+  border: 1px solid #2c303a;
+  border-radius: 10px;
+  padding: 10px 12px;
+  opacity: 0;
+  animation: statPop 0.4s ease forwards;
+  animation-delay: 1s;
+}
+
+.go-award label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--muted);
+}
+
+.go-award span {
+  display: block;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 13px;
+  margin-top: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.go-award small {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.go-award.guardian { border-color: rgba(56, 232, 212, 0.4); }
+.go-award.guardian span { color: var(--cyan); }
+.go-award.saboteur { border-color: rgba(255, 61, 127, 0.4); }
+.go-award.saboteur span { color: var(--magenta); }
+
+.go-scoreline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  margin: 18px 0 6px;
+}
+
+.go-rank {
+  font-family: 'Press Start 2P', var(--mono);
+  font-size: 44px;
+  line-height: 1;
+  padding: 14px 16px;
+  border: 3px solid var(--muted);
+  border-radius: 12px;
+  animation: rankStamp 0.45s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+}
+
+@keyframes rankStamp {
+  from { transform: scale(2.4) rotate(-14deg); opacity: 0; }
+  to { transform: scale(1) rotate(-6deg); opacity: 1; }
+}
+
+.go-score-stack { display: flex; flex-direction: column; align-items: flex-start; }
+
+.go-score {
+  font-family: 'Press Start 2P', var(--mono);
+  font-size: 34px;
+  color: var(--text);
+}
+
+.go-score-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.go-newbest {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: var(--gold);
+  margin: 8px 0 0;
+  animation: newBestPulse 1.1s ease-in-out infinite;
+}
+
+@keyframes newBestPulse {
+  0%, 100% { opacity: 1; text-shadow: 0 0 12px rgba(240, 185, 11, 0.7); }
+  50% { opacity: 0.65; text-shadow: none; }
+}
+
+.go-place {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--cyan);
+  margin-top: 6px;
+}
+
+.go-stats {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 18px 0 22px;
+}
+
+.go-stat {
+  background: #1a1d23;
+  border: 1px solid #2c303a;
+  border-radius: 10px;
+  padding: 10px 14px;
+  min-width: 74px;
+  opacity: 0;
+  animation: statPop 0.4s ease forwards;
+  animation-delay: calc(0.35s + var(--i) * 0.12s);
+}
+
+@keyframes statPop {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.go-stat span {
+  display: block;
+  font-family: 'Press Start 2P', var(--mono);
+  font-size: 15px;
+  color: var(--text);
+}
+
+.go-stat label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+/* ---------- Leaderboard ("Hall of Flame") ---------- */
+
 .leaderboard {
   margin-top: 24px;
   text-align: left;
@@ -717,16 +1040,92 @@ html, body {
 }
 
 .lb-row {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 26px 30px 1fr auto;
+  align-items: center;
+  gap: 10px;
   font-family: var(--mono);
   font-size: 13px;
-  padding: 5px 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: var(--muted);
+  opacity: 0;
+  animation: statPop 0.35s ease forwards;
+  animation-delay: calc(0.5s + var(--i) * 0.07s);
+}
+
+.lb-rank {
+  font-family: 'Press Start 2P', var(--mono);
+  font-size: 11px;
+  text-align: center;
   color: var(--muted);
 }
 
-.lb-row.me { color: var(--gold); }
-.lb-row span:first-child { color: var(--text); }
+.lb-row.top1 .lb-rank { color: #ffd700; text-shadow: 0 0 8px rgba(255, 215, 0, 0.6); }
+.lb-row.top2 .lb-rank { color: #c8ccd4; text-shadow: 0 0 8px rgba(200, 204, 212, 0.5); }
+.lb-row.top3 .lb-rank { color: #cd7f32; text-shadow: 0 0 8px rgba(205, 127, 50, 0.5); }
+
+.lb-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid #2c303a;
+  object-fit: cover;
+}
+
+.lb-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-name b { color: var(--gold); font-size: 10px; letter-spacing: 1px; margin-left: 6px; }
+
+.lb-score { font-family: 'Press Start 2P', var(--mono); font-size: 11px; color: var(--text); }
+
+.lb-row.me {
+  background: rgba(240, 185, 11, 0.08);
+  border: 1px solid rgba(240, 185, 11, 0.35);
+}
+
+/* ---------- Menu screens: fit + scroll on mobile ---------- */
+
+/* Menu screens scroll when their card is taller than the viewport (game
+   screen stays locked). margin:auto on the card keeps it centered on big
+   screens while still letting the top stay reachable when it overflows -
+   plain flex centering would clip the top edge off-screen. */
+#login-screen, #start-screen, #howto-screen, #gameover-screen {
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 18px 0;
+}
+
+#login-screen .login-card,
+#start-screen .login-card,
+#howto-screen .login-card,
+#gameover-screen .login-card {
+  margin: auto;
+}
+
+/* Compact the cards on narrow phones and short landscape viewports alike. */
+@media (max-width: 700px), (max-height: 640px) {
+  .login-card { padding: 22px 18px; max-width: 520px; }
+  .sub { font-size: 12px; margin-bottom: 16px; }
+  .rules { gap: 6px; margin-top: 16px; padding-top: 14px; }
+  .rule { font-size: 11px; line-height: 1.5; }
+  .tag { font-size: 10px; padding: 1px 6px; margin-right: 6px; }
+  .login-btn { padding: 11px 24px; font-size: 13px; }
+
+  .go-scoreline { gap: 14px; margin: 12px 0 4px; }
+  .go-rank { font-size: 30px; padding: 10px 12px; }
+  .go-score { font-size: 24px; }
+  .go-stats { gap: 8px; margin: 14px 0 16px; }
+  .go-stat { min-width: 62px; padding: 8px 10px; }
+  .go-stat span { font-size: 12px; }
+  .go-killer { margin: 10px 0 2px; }
+  #go-killer-canvas { width: 44px; height: 44px; }
+  .go-killer-stack span { font-size: 11px; }
+  .go-verdict { flex-direction: row; gap: 8px; margin-bottom: 14px; }
+  .go-award { padding: 8px 10px; }
+  .gameover-card { max-height: none; }
+  .lb-row { font-size: 12px; gap: 8px; grid-template-columns: 22px 26px 1fr auto; }
+  .lb-avatar { width: 22px; height: 22px; }
+}
 
 /* ---------- Narrow-screen fixes (HUD overflow + pill overlap) ---------- */
 
