@@ -4207,21 +4207,31 @@ function animateScoreCountUp(el, target) {
 }
 
 // ---------------------------------------------------------------------------
-// Fatality sequence - a short (2s), skippable Mortal-Kombat-style finishing
-// clip played on death, before the RUN OVER screen. The backdrop is a real
-// freeze-frame of the arena at the moment of death (the main game canvas has
-// already stopped updating by the time this runs, since state.running is
-// false - a single drawImage() captures exactly where the player died),
-// with one of ten randomly-picked pixel-art finishing moves animated on top,
-// built from the same particle/sprite toolkit as the rest of the game.
-// Every move is symbolic (tint/scale/particle effects) rather than literal
-// gore, which both fits a 10x10-pixel-grid character and reads clearly at
-// this resolution. Click or Escape skips straight to the RUN OVER screen.
+// Takedown sequence - a ~10s, skippable finishing clip played on death,
+// before the RUN OVER screen. The backdrop is a real freeze-frame of the
+// arena at the moment of death (the main game canvas has already stopped
+// updating by the time this runs, since state.running is false - a single
+// drawImage() captures exactly where the player died), with one of ten
+// randomly-picked pixel-art finishing moves animated on top, built from the
+// same particle/sprite toolkit as the rest of the game. Every move is
+// symbolic (tint/scale/particle effects) rather than literal gore, which
+// both fits a 10x10-pixel-grid character and reads clearly at this
+// resolution. Click or Escape skips straight to the RUN OVER screen.
+//
+// Each clip's own choreographed action (the actual hit/finish) still plays
+// out at its original, punchy pace within TAKEDOWN_ACTION_WINDOW - the clip
+// functions themselves are unchanged and never see a `t` beyond that, so
+// slowing nothing down was ever a risk of extending the overall duration.
+// The remaining time is a themed ambient aftermath (drifting embers/smoke/
+// etc., color per clip) layered on top by frame() itself, so the full ~10s
+// stays visually alive instead of holding a dead static frame after the
+// first couple of seconds.
 // ---------------------------------------------------------------------------
 const fatalityScreen = document.getElementById('fatality-screen');
 const fatalityCanvas = document.getElementById('fatality-canvas');
 const fatalityCtx = fatalityCanvas.getContext('2d');
-const FATALITY_DURATION = 2000;
+const TAKEDOWN_DURATION = 10000;
+const TAKEDOWN_ACTION_WINDOW = 2.2;
 let fatalityState = null; // { clip, killerSprite, x, y, startedAt, raf }
 let fatalityFx = null;
 let fatalityBgCanvas = null;
@@ -4490,17 +4500,20 @@ function fatSwarmed(c, x, y, t, dt) {
   fatDrawFx(c, dt);
 }
 
+// `color` themes the ambient aftermath particles frame() layers on top once
+// each clip's own choreographed action window has passed (see fatalityLoop
+// below) - it's not used by the clip functions themselves.
 const FATALITY_CLIPS = [
-  { name: 'DECAPITATED', draw: fatDecapitated },
-  { name: 'IMPALED', draw: fatImpaled },
-  { name: 'INCINERATED', draw: fatIncinerated },
-  { name: 'ELECTROCUTED', draw: fatElectrocuted },
-  { name: 'OBLITERATED', draw: fatObliterated },
-  { name: 'FROZEN SOLID', draw: fatFrozen },
-  { name: 'CRUSHED', draw: fatCrushed },
-  { name: 'CLEAVED IN TWO', draw: fatCleaved },
-  { name: 'TOXIC DEMISE', draw: fatToxic },
-  { name: 'SWARMED UNDER', draw: fatSwarmed },
+  { name: 'DECAPITATED', draw: fatDecapitated, color: '#ff2e2e' },
+  { name: 'IMPALED', draw: fatImpaled, color: '#8a0e0e' },
+  { name: 'INCINERATED', draw: fatIncinerated, color: '#ff9d3d' },
+  { name: 'ELECTROCUTED', draw: fatElectrocuted, color: '#9dfbff' },
+  { name: 'OBLITERATED', draw: fatObliterated, color: '#6a5a4a' },
+  { name: 'FROZEN SOLID', draw: fatFrozen, color: '#8fe0ff' },
+  { name: 'CRUSHED', draw: fatCrushed, color: '#5a4a2a' },
+  { name: 'CLEAVED IN TWO', draw: fatCleaved, color: '#ff2e2e' },
+  { name: 'TOXIC DEMISE', draw: fatToxic, color: '#4a9e22' },
+  { name: 'SWARMED UNDER', draw: fatSwarmed, color: '#2dd4a8' },
 ];
 
 function playFatality(killerType, onDone) {
@@ -4560,8 +4573,13 @@ function playFatality(killerType, onDone) {
     if (!fatalityState) return;
     const nowMs = performance.now();
     const t = (nowMs - fatalityState.startedAt) / 1000;
-    if (t >= FATALITY_DURATION / 1000) { finish(); return; }
+    if (t >= TAKEDOWN_DURATION / 1000) { finish(); return; }
     const dt = 1 / 60;
+    // The clip's own choreography is clamped to its original action window
+    // - it never sees `t` beyond that, so the actual hit/finish always
+    // plays at the same punchy pace it always did, regardless of how long
+    // the overall hold lasts.
+    const clipT = Math.min(t, TAKEDOWN_ACTION_WINDOW);
 
     fatalityCtx.imageSmoothingEnabled = false;
     fatalityCtx.clearRect(0, 0, fatalityCanvas.width, fatalityCanvas.height);
@@ -4571,9 +4589,24 @@ function playFatality(killerType, onDone) {
       fatalityFx.shake = Math.max(0, fatalityFx.shake - dt * 30);
     }
     fatalityCtx.drawImage(fatalityBgCanvas, 0, 0);
-    fatalityCtx.fillStyle = 'rgba(0,0,0,0.4)';
+    // Vignette darkens gradually through the aftermath hold, reading as a
+    // slow fade toward the cut rather than a flat static shade throughout.
+    const vigAlpha = 0.4 + (t > TAKEDOWN_ACTION_WINDOW ? Math.min(0.3, (t - TAKEDOWN_ACTION_WINDOW) * 0.045) : 0);
+    fatalityCtx.fillStyle = `rgba(0,0,0,${vigAlpha.toFixed(3)})`;
     fatalityCtx.fillRect(0, 0, fatalityCanvas.width, fatalityCanvas.height);
-    fatalityState.clip.draw(fatalityCtx, fatalityState.x, fatalityState.y, t, dt, fatalityState.killerSprite);
+    // Ambient aftermath - once the clip's own action has settled, keep
+    // seeding themed particles (embers/smoke/etc.) so the hold stays alive;
+    // the clip's own trailing fatDrawFx(c, dt) call below animates/draws
+    // whatever's currently in fatalityFx regardless of clipT, so this just
+    // needs to inject new ones, not duplicate that update.
+    if (t > TAKEDOWN_ACTION_WINDOW && Math.random() < dt * 2.5) {
+      fatDrift(
+        fatalityState.x + (Math.random() - 0.5) * 60,
+        fatalityState.y + (Math.random() - 0.5) * 30,
+        fatalityState.clip.color || '#ffffff', 1, 10
+      );
+    }
+    fatalityState.clip.draw(fatalityCtx, fatalityState.x, fatalityState.y, clipT, dt, fatalityState.killerSprite);
     fatalityCtx.restore();
 
     fatalityState.raf = requestAnimationFrame(frame);
