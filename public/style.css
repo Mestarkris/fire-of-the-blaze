@@ -644,24 +644,54 @@ html, body {
 
 .def-slot {
   position: relative;
-  width: 62px;
-  padding: 6px 4px 10px;
+  width: 72px;
+  padding: 8px 4px 10px;
   background: rgba(21, 23, 28, 0.85);
   border: 1px solid #2c303a;
-  border-radius: 8px;
+  border-radius: 10px;
   text-align: center;
   font-family: var(--mono);
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
   touch-action: manipulation;
+  transition: box-shadow 0.2s ease, transform 0.15s ease;
 }
 
-.def-slot .def-key { display: block; font-size: 9px; color: var(--muted); }
-.def-slot .def-name { display: block; font-size: 9px; letter-spacing: 1px; margin-top: 2px; }
+/* Key number as a small badge pinned to the corner, out of the portrait's way. */
+.def-slot .def-key {
+  position: absolute;
+  top: -6px; left: -6px;
+  width: 16px; height: 16px;
+  line-height: 16px;
+  border-radius: 50%;
+  background: #12141a;
+  border: 1px solid #2c303a;
+  font-size: 9px;
+  color: var(--muted);
+  z-index: 1;
+}
+
+/* The actual pixel-art portrait, pulled straight from the same sprite used
+   in-game - a glowing backdrop behind it (colored per-defender via the
+   --def-color custom property, set from JS) makes it read as a character
+   roster rather than a row of labeled buttons. */
+.def-icon {
+  display: block;
+  width: 32px; height: 32px;
+  margin: 2px auto 3px;
+  image-rendering: pixelated;
+  border-radius: 6px;
+  background: radial-gradient(circle, color-mix(in srgb, var(--def-color, #2c303a) 35%, transparent) 0%, transparent 72%);
+}
+
+.def-slot .def-name { display: block; font-size: 8px; letter-spacing: 1px; color: var(--muted); }
 
 .def-slot.ready { box-shadow: 0 0 12px rgba(240, 185, 11, 0.18); }
+.def-slot.ready .def-icon { background: radial-gradient(circle, color-mix(in srgb, var(--def-color, #2c303a) 55%, transparent) 0%, transparent 72%); }
 .def-slot.cooldown { opacity: 0.45; }
+.def-slot.cooldown .def-icon { filter: grayscale(0.6); }
+.def-slot.active { transform: scale(1.08); }
 
 /* Cooldown seconds overlay - hidden once the slot is ready or active. */
 .def-slot .def-cd {

@@ -1277,7 +1277,14 @@ window.addEventListener('keydown', (e) => {
 document.querySelectorAll('.def-slot').forEach((slot) => {
   const type = slot.dataset.def;
   slot.style.color = DEFENDER_DEFS[type].color;
+  slot.style.setProperty('--def-color', DEFENDER_DEFS[type].color);
   slot.querySelector('.def-timer-fill').style.background = DEFENDER_DEFS[type].color;
+  // Same pixel sprite the defender uses on the battlefield, blitted once
+  // into its HUD slot - a real portrait instead of just a text label.
+  const iconCanvas = slot.querySelector('.def-icon');
+  const iconCtx = iconCanvas.getContext('2d');
+  iconCtx.imageSmoothingEnabled = false;
+  drawSprite(iconCtx, SPRITES['def_' + type], iconCanvas.width / 2, iconCanvas.height / 2, 30, false);
   // pointerdown covers mouse and touch alike - tapping the slot is also the
   // mobile summon path, since phones have no number-key row.
   slot.addEventListener('pointerdown', (ev) => {
@@ -1999,7 +2006,10 @@ const ELITE_ATTACK = {
   archer: { tanky: false, projSpeed: 480, projR: 4, cooldown: [0.9, 1.2], damage: 12, kind: 'bolt', color: '#c8a25a' },
   frost: { tanky: false, projSpeed: 260, projR: 6, cooldown: [1.8, 2.2], damage: 10, kind: 'bolt', color: '#8fe0ff', status: 'chill', statusDur: 2200, slowMul: 0.45 },
   toxic: { tanky: false, projSpeed: 220, projR: 7, cooldown: [2.2, 2.6], damage: 8, kind: 'bolt', color: '#7cff3d', status: 'dot', statusDur: 4000, statusDps: 3, hazard: true, hazardR: 55, hazardDur: 4000, life: 1.6 },
-  stormcaller: { tanky: false, projSpeed: 300, projR: 6, cooldown: [2.0, 2.4], damage: 15, kind: 'bolt', color: '#4dd8ff', homing: 0.08 },
+  // Used to home in on the player (bending toward you every frame, hard to
+  // out-maneuver) - now a straight shot like every other elite's bolt, just
+  // with above-average speed/damage as its identity instead.
+  stormcaller: { tanky: false, projSpeed: 300, projR: 6, cooldown: [2.0, 2.4], damage: 15, kind: 'bolt', color: '#4dd8ff' },
   acid: { tanky: false, projSpeed: 210, projR: 7, cooldown: [2.2, 2.6], damage: 10, kind: 'bolt', color: '#b6ff3d', hazard: true, hazardR: 65, hazardDur: 5000, life: 1.6 },
   pyro: { tanky: false, projSpeed: 230, projR: 7, cooldown: [2.0, 2.4], damage: 13, kind: 'bolt', color: '#ff6a1a', status: 'dot', statusDur: 3000, statusDps: 4 },
   bomber: { tanky: true, projSpeed: 130, projR: 8, cooldown: [2.6, 3.0], damage: 18, kind: 'grenade', color: '#ffb020', splash: 100 },
