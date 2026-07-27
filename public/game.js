@@ -4515,8 +4515,20 @@ function playFatality(killerType, onDone) {
   fatalityBgCanvas.height = fatalityCanvas.height;
   // Freeze-frame the actual arena at the moment of death - the main canvas
   // has already stopped updating (state.running is false), so this is a
-  // clean snapshot of exactly where and how the player died.
+  // clean snapshot of exactly where and how the player died. Captured
+  // BEFORE hiding gameScreen below - hiding it is a CSS/visibility change
+  // only, the canvas's actual pixel content is unaffected either way.
   fatalityBgCanvas.getContext('2d').drawImage(canvas, 0, 0);
+
+  // .screen uses position:relative (normal document flow), not
+  // fixed/absolute - every other screen transition in this codebase hides
+  // the outgoing screen the instant it shows the next one so only one is
+  // ever unhidden at a time. This one has to follow the same rule: leaving
+  // gameScreen visible here would stack it and fatality-screen vertically
+  // in the flow, pushing the fatality clip a full viewport below the
+  // still-visible game screen - entirely outside the clipped body,
+  // invisible, even though everything about it was otherwise working.
+  gameScreen.classList.add('hidden');
 
   resetFatalityFx();
   document.getElementById('fatality-subtitle').textContent = clip.name;
