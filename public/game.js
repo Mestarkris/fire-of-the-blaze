@@ -1517,6 +1517,8 @@ function resetState() {
   state.chaosEventTimer = 20 + Math.random() * 15;
   state.bossDeathFx = [];
   clearGameOverVoices();
+  if (fatalityState) { cancelAnimationFrame(fatalityState.raf); fatalityState = null; }
+  fatalityScreen.classList.add('hidden');
   lastLineIndex = {};
   lastSpeechBubbleAt = 0;
   lastTauntBySender = {};
@@ -4204,17 +4206,378 @@ function animateScoreCountUp(el, target) {
   })();
 }
 
+// ---------------------------------------------------------------------------
+// Fatality sequence - a short (2s), skippable Mortal-Kombat-style finishing
+// clip played on death, before the RUN OVER screen. The backdrop is a real
+// freeze-frame of the arena at the moment of death (the main game canvas has
+// already stopped updating by the time this runs, since state.running is
+// false - a single drawImage() captures exactly where the player died),
+// with one of ten randomly-picked pixel-art finishing moves animated on top,
+// built from the same particle/sprite toolkit as the rest of the game.
+// Every move is symbolic (tint/scale/particle effects) rather than literal
+// gore, which both fits a 10x10-pixel-grid character and reads clearly at
+// this resolution. Click or Escape skips straight to the RUN OVER screen.
+// ---------------------------------------------------------------------------
+const fatalityScreen = document.getElementById('fatality-screen');
+const fatalityCanvas = document.getElementById('fatality-canvas');
+const fatalityCtx = fatalityCanvas.getContext('2d');
+const FATALITY_DURATION = 2000;
+let fatalityState = null; // { clip, killerSprite, x, y, startedAt, raf }
+let fatalityFx = null;
+let fatalityBgCanvas = null;
+
+function resetFatalityFx() { fatalityFx = { parts: [], rings: [], shake: 0 }; }
+
+function fatBurst(x, y, color, n = 16, speed = 220) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = speed * (0.4 + Math.random() * 0.8);
+    fatalityFx.parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5 + Math.random() * 0.3, color, grav: 220 });
+  }
+}
+// Slower-drifting variant for smoke/embers/bubbles - no gravity, gentle upward drift.
+function fatDrift(x, y, color, n = 6, speed = 30) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    fatalityFx.parts.push({ x, y, vx: Math.cos(a) * speed, vy: -30 - Math.random() * 30, life: 0.8 + Math.random() * 0.4, color, grav: 0 });
+  }
+}
+function fatRing(x, y, color) { fatalityFx.rings.push({ x, y, r: 6, life: 0.6, color }); }
+
+function fatDrawFx(c, dt) {
+  fatalityFx.parts.forEach((p) => { p.life -= dt; p.vy += (p.grav || 0) * dt; p.x += p.vx * dt; p.y += p.vy * dt; });
+  fatalityFx.parts = fatalityFx.parts.filter((p) => p.life > 0);
+  fatalityFx.parts.forEach((p) => {
+    c.globalAlpha = Math.max(0, p.life / 0.6);
+    c.fillStyle = p.color;
+    c.fillRect(p.x - 2, p.y - 2, 4, 4);
+  });
+  c.globalAlpha = 1;
+  fatalityFx.rings.forEach((r) => { r.life -= dt; r.r += 240 * dt; });
+  fatalityFx.rings = fatalityFx.rings.filter((r) => r.life > 0);
+  fatalityFx.rings.forEach((r) => {
+    c.save();
+    c.globalAlpha = Math.max(0, r.life / 0.6);
+    c.strokeStyle = r.color;
+    c.lineWidth = 3;
+    c.beginPath(); c.arc(r.x, r.y, r.r, 0, Math.PI * 2); c.stroke();
+    c.restore();
+  });
+}
+
+// Draws `sprite` tinted with `color`, respecting its silhouette (transparent
+// pixels stay transparent) rather than a flat rect over it - draws to an
+// isolated scratch canvas first (so the tint's source-atop compositing
+// can't bleed into the frozen background behind it), then blits the
+// tinted result onto the real destination.
+let fatTintCanvas = null, fatTintCtx = null;
+function drawTintedSprite(c, sprite, x, y, size, color, alpha, flip) {
+  const scale = size / sprite.width;
+  const w = Math.max(1, Math.ceil(sprite.width * scale));
+  const h = Math.max(1, Math.ceil(sprite.height * scale));
+  if (!fatTintCanvas) { fatTintCanvas = document.createElement('canvas'); fatTintCtx = fatTintCanvas.getContext('2d'); }
+  fatTintCanvas.width = w; fatTintCanvas.height = h;
+  fatTintCtx.imageSmoothingEnabled = false;
+  drawSprite(fatTintCtx, sprite, w / 2, h / 2, size, flip);
+  fatTintCtx.globalCompositeOperation = 'source-atop';
+  fatTintCtx.globalAlpha = alpha;
+  fatTintCtx.fillStyle = color;
+  fatTintCtx.fillRect(0, 0, w, h);
+  fatTintCtx.globalCompositeOperation = 'source-over';
+  fatTintCtx.globalAlpha = 1;
+  c.drawImage(fatTintCanvas, x - w / 2, y - h / 2);
+}
+
+function fatDecapitated(c, x, y, t, dt, killerSprite) {
+  if (t < 0.5) drawSprite(c, killerSprite, x + 40, y - 4, 44, true);
+  const cut = 0.35;
+  if (t < cut) {
+    drawSprite(c, SPRITES.playerF1, x, y, 48, false);
+  } else {
+    if (!fatalityFx.rings.length) { fatBurst(x, y - 18, '#ff2e2e', 22, 240); fatRing(x, y - 18, '#ff2e2e'); }
+    const p2 = t - cut;
+    // body: clipped to the lower ~65% of the sprite box, slumps slightly
+    c.save();
+    c.beginPath(); c.rect(x - 26, y - 6, 52, 40); c.clip();
+    c.globalAlpha = Math.max(0, 1 - p2 * 0.5);
+    drawSprite(c, SPRITES.playerF1, x, y + Math.min(10, p2 * 14), 48, false);
+    c.restore();
+    // head: clipped to the upper ~35%, launches upward and fades
+    c.save();
+    c.beginPath(); c.rect(x - 26, y - 26, 52, 22); c.clip();
+    c.globalAlpha = Math.max(0, 1 - p2 * 0.9);
+    drawSprite(c, SPRITES.playerF1, x + p2 * 30, y - Math.min(70, p2 * 130), 48, false);
+    c.restore();
+  }
+  fatDrawFx(c, dt);
+}
+
+function fatImpaled(c, x, y, t, dt, killerSprite) {
+  const strikeT = 0.3;
+  drawSprite(c, killerSprite, x + 46, y, 44, true);
+  if (t >= strikeT) {
+    const reach = Math.min(1, (t - strikeT) * 6);
+    c.save();
+    c.strokeStyle = '#8a0e0e';
+    c.lineWidth = 6;
+    c.beginPath(); c.moveTo(x + 40, y); c.lineTo(x + 40 - reach * 44, y); c.stroke();
+    c.restore();
+    if (reach >= 1 && !fatalityFx.rings.length) { fatBurst(x - 10, y, '#ff2e2e', 16, 180); fatRing(x - 10, y, '#ff2e2e'); }
+  }
+  const jitter = t > strikeT && t < strikeT + 0.3 ? (Math.random() - 0.5) * 4 : 0;
+  const tint = Math.min(0.6, Math.max(0, (t - strikeT) * 0.6));
+  drawTintedSprite(c, SPRITES.playerF1, x + jitter, y + (t > strikeT ? Math.min(8, (t - strikeT) * 10) : 0), 48, '#5a0a0a', tint, false);
+  fatDrawFx(c, dt);
+}
+
+function fatIncinerated(c, x, y, t, dt) {
+  const p = Math.min(1, t / 1.6);
+  if (Math.random() < dt * 22) fatDrift(x + (Math.random() - 0.5) * 20, y + 20 - p * 10, '#ff9d3d', 1, 20);
+  if (Math.random() < dt * 10) fatDrift(x + (Math.random() - 0.5) * 20, y, '#ffe08a', 1, 16);
+  drawTintedSprite(c, SPRITES.playerF1, x, y, 48 * (1 - p * 0.35), '#ff5a1a', Math.min(0.85, p * 1.1), false);
+  fatDrawFx(c, dt);
+}
+
+function fatElectrocuted(c, x, y, t, dt) {
+  const strikes = [0.15, 0.5, 0.85, 1.15];
+  strikes.forEach((st) => {
+    if (t >= st && t < st + 0.1) {
+      c.save();
+      c.strokeStyle = '#e0f7ff';
+      c.lineWidth = 3;
+      c.beginPath();
+      c.moveTo(x + (Math.random() - 0.5) * 20, y - 140);
+      for (let s = 1; s <= 3; s++) c.lineTo(x + (Math.random() - 0.5) * 26, y - 140 + (140 * s) / 3);
+      c.lineTo(x, y - 20);
+      c.stroke();
+      c.restore();
+      if (Math.abs(t - st) < 0.02) fatBurst(x, y - 20, '#9dfbff', 10, 160);
+    }
+  });
+  const lastStrike = strikes.filter((s) => t >= s).pop();
+  const flicker = lastStrike !== undefined && t - lastStrike < 0.15 && Math.floor((t - lastStrike) * 40) % 2 === 0;
+  if (flicker) drawTintedSprite(c, SPRITES.playerF1, x, y, 48, '#e0f7ff', 0.8, false);
+  else drawTintedSprite(c, SPRITES.playerF1, x, y + Math.min(6, t * 3), 48, '#2c303a', Math.min(0.5, t * 0.4), false);
+  if (t > 1.2 && Math.random() < dt * 6) fatDrift(x, y, 'rgba(140,140,140,0.6)', 1, 10);
+  fatDrawFx(c, dt);
+}
+
+function fatObliterated(c, x, y, t, dt) {
+  if (t < 0.1) fatalityFx.shake = 20;
+  const grow = Math.min(1, t / 0.5);
+  if (t < 0.55) {
+    const grad = c.createRadialGradient(x, y, 0, x, y, 20 + grow * 90);
+    grad.addColorStop(0, 'rgba(255,255,255,0.95)');
+    grad.addColorStop(0.4, 'rgba(255,150,40,0.85)');
+    grad.addColorStop(1, 'rgba(255,90,26,0)');
+    c.fillStyle = grad;
+    c.beginPath(); c.arc(x, y, 20 + grow * 90, 0, Math.PI * 2); c.fill();
+  }
+  if (t < 0.5) drawSprite(c, SPRITES.playerF1, x, y, 48 * (1 - grow * 0.6), false);
+  if (Math.abs(t - 0.45) < 0.03) { fatBurst(x, y, '#ff9d3d', 26, 340); fatBurst(x, y, '#ffe08a', 14, 220); fatRing(x, y, '#ff6a1a'); }
+  fatDrawFx(c, dt);
+}
+
+function fatFrozen(c, x, y, t, dt) {
+  const shatterT = 1.1;
+  if (t < shatterT) {
+    const p = Math.min(1, t / 0.5);
+    drawTintedSprite(c, SPRITES.playerF1, x, y, 48, '#8fe0ff', Math.min(0.75, p * 0.9), false);
+    c.save();
+    c.globalAlpha = 0.35 * p;
+    c.fillStyle = '#c8f4ff';
+    c.beginPath(); c.arc(x, y, 30 * p, 0, Math.PI * 2); c.fill();
+    c.restore();
+  } else {
+    if (!fatalityFx.rings.length) { fatBurst(x, y, '#8fe0ff', 26, 260); fatBurst(x, y, '#ffffff', 10, 200); fatRing(x, y, '#8fe0ff'); }
+  }
+  fatDrawFx(c, dt);
+}
+
+function fatCrushed(c, x, y, t, dt) {
+  const impactT = 0.6;
+  const dropY = Math.min(y - 10, -200 + (y + 200) * Math.min(1, t / impactT));
+  if (t < impactT) {
+    c.save();
+    c.globalAlpha = 0.85;
+    c.fillStyle = '#0a0a0d';
+    c.beginPath(); c.ellipse(x, dropY, 34, 40, 0, 0, Math.PI * 2); c.fill();
+    c.restore();
+  }
+  if (t >= impactT - 0.03 && t < impactT + 0.03) { fatalityFx.shake = 18; fatBurst(x, y + 14, '#5a4a2a', 16, 160); }
+  const squash = t < impactT ? 1 : Math.max(0.08, 1 - (t - impactT) * 3);
+  c.save();
+  c.translate(x, y + 10);
+  c.scale(1, squash);
+  c.translate(-x, -(y + 10));
+  c.globalAlpha = t >= impactT ? Math.max(0, 1 - (t - impactT) * 0.7) : 1;
+  drawSprite(c, SPRITES.playerF1, x, y, 48, false);
+  c.restore();
+  if (t >= impactT) {
+    c.save();
+    c.globalAlpha = 0.7;
+    c.fillStyle = '#0a0a0d';
+    c.beginPath(); c.ellipse(x, y + 20, 30, 8, 0, 0, Math.PI * 2); c.fill();
+    c.restore();
+  }
+  fatDrawFx(c, dt);
+}
+
+function fatCleaved(c, x, y, t, dt) {
+  const cut = 0.3;
+  if (t < cut) {
+    drawSprite(c, SPRITES.playerF1, x, y, 48, false);
+  } else {
+    if (!fatalityFx.rings.length) { fatBurst(x, y, '#ff2e2e', 20, 220); fatRing(x, y, '#fff2f2'); }
+    const p2 = t - cut;
+    c.save();
+    c.beginPath(); c.moveTo(x - 26, y - 26); c.lineTo(x, y - 26); c.lineTo(x - 26, y + 26); c.closePath(); c.clip();
+    c.globalAlpha = Math.max(0, 1 - p2 * 0.7);
+    drawSprite(c, SPRITES.playerF1, x - p2 * 50, y - p2 * 20, 48, false);
+    c.restore();
+    c.save();
+    c.beginPath(); c.moveTo(x + 26, y - 26); c.lineTo(x, y - 26); c.lineTo(x + 26, y + 26); c.closePath(); c.clip();
+    c.globalAlpha = Math.max(0, 1 - p2 * 0.7);
+    drawSprite(c, SPRITES.playerF1, x + p2 * 50, y + p2 * 20, 48, false);
+    c.restore();
+  }
+  fatDrawFx(c, dt);
+}
+
+function fatToxic(c, x, y, t, dt) {
+  const p = Math.min(1, t / 1.5);
+  if (Math.random() < dt * 14) fatDrift(x + (Math.random() - 0.5) * 24, y, '#7cff3d', 1, 14);
+  c.save();
+  c.translate(x, y + 24);
+  c.scale(1, Math.max(0.06, 1 - p));
+  c.translate(-x, -(y + 24));
+  drawTintedSprite(c, SPRITES.playerF1, x, y, 48, '#4a9e22', Math.min(0.8, p), false);
+  c.restore();
+  if (p > 0.8) {
+    c.save();
+    c.globalAlpha = 0.6;
+    c.fillStyle = '#3a7a1a';
+    c.beginPath(); c.ellipse(x, y + 26, 26, 7, 0, 0, Math.PI * 2); c.fill();
+    c.restore();
+  }
+  fatDrawFx(c, dt);
+}
+
+function fatSwarmed(c, x, y, t, dt) {
+  if (!fatalityFx.swarmers) {
+    fatalityFx.swarmers = Array.from({ length: 6 }, (_, i) => ({
+      angle: (i / 6) * Math.PI * 2,
+      dist: 140 + Math.random() * 40,
+      seed: Math.random() * 6,
+    }));
+  }
+  const convergeT = 0.55, scatterT = 1.5;
+  const playerVisible = t < convergeT + 0.1;
+  if (playerVisible) drawSprite(c, SPRITES.playerF1, x, y, 48, false);
+  fatalityFx.swarmers.forEach((s) => {
+    let d;
+    if (t < convergeT) d = s.dist * (1 - t / convergeT);
+    else if (t < scatterT) d = 6 + Math.sin(t * 20 + s.seed) * 4;
+    else d = Math.min(s.dist, (t - scatterT) * 260);
+    const jitterA = s.angle + Math.sin(t * 3 + s.seed) * 0.15;
+    const sx = x + Math.cos(jitterA) * d;
+    const sy = y + Math.sin(jitterA) * d * 0.7;
+    c.save();
+    c.globalAlpha = t > scatterT ? Math.max(0, 1 - (t - scatterT) * 1.2) : 1;
+    drawSprite(c, SPRITES.swarmer, sx, sy, 24, Math.cos(jitterA) < 0);
+    c.restore();
+  });
+  fatDrawFx(c, dt);
+}
+
+const FATALITY_CLIPS = [
+  { name: 'DECAPITATED', draw: fatDecapitated },
+  { name: 'IMPALED', draw: fatImpaled },
+  { name: 'INCINERATED', draw: fatIncinerated },
+  { name: 'ELECTROCUTED', draw: fatElectrocuted },
+  { name: 'OBLITERATED', draw: fatObliterated },
+  { name: 'FROZEN SOLID', draw: fatFrozen },
+  { name: 'CRUSHED', draw: fatCrushed },
+  { name: 'CLEAVED IN TWO', draw: fatCleaved },
+  { name: 'TOXIC DEMISE', draw: fatToxic },
+  { name: 'SWARMED UNDER', draw: fatSwarmed },
+];
+
+function playFatality(killerType, onDone) {
+  const p = state.player;
+  const clip = FATALITY_CLIPS[Math.floor(Math.random() * FATALITY_CLIPS.length)];
+  const killerSprite = SPRITES[killerType] || SPRITES.enemy;
+
+  fatalityCanvas.width = window.innerWidth;
+  fatalityCanvas.height = window.innerHeight;
+  if (!fatalityBgCanvas) fatalityBgCanvas = document.createElement('canvas');
+  fatalityBgCanvas.width = fatalityCanvas.width;
+  fatalityBgCanvas.height = fatalityCanvas.height;
+  // Freeze-frame the actual arena at the moment of death - the main canvas
+  // has already stopped updating (state.running is false), so this is a
+  // clean snapshot of exactly where and how the player died.
+  fatalityBgCanvas.getContext('2d').drawImage(canvas, 0, 0);
+
+  resetFatalityFx();
+  document.getElementById('fatality-subtitle').textContent = clip.name;
+  const titleEl = document.querySelector('.fatality-title');
+  const subEl = document.getElementById('fatality-subtitle');
+  titleEl.style.animation = 'none'; void titleEl.offsetWidth; titleEl.style.animation = '';
+  subEl.style.animation = 'none'; void subEl.offsetWidth; subEl.style.animation = '';
+  fatalityScreen.classList.remove('hidden');
+
+  let finished = false;
+  fatalityState = { clip, killerSprite, x: p.x, y: p.y, startedAt: performance.now(), raf: 0 };
+
+  function finish() {
+    if (finished) return;
+    finished = true;
+    if (fatalityState) cancelAnimationFrame(fatalityState.raf);
+    fatalityState = null;
+    fatalityScreen.classList.add('hidden');
+    fatalityScreen.removeEventListener('click', finish);
+    window.removeEventListener('keydown', escHandler);
+    onDone();
+  }
+  function escHandler(e) { if (e.key === 'Escape') finish(); }
+
+  fatalityScreen.addEventListener('click', finish);
+  window.addEventListener('keydown', escHandler);
+
+  function frame() {
+    if (!fatalityState) return;
+    const nowMs = performance.now();
+    const t = (nowMs - fatalityState.startedAt) / 1000;
+    if (t >= FATALITY_DURATION / 1000) { finish(); return; }
+    const dt = 1 / 60;
+
+    fatalityCtx.imageSmoothingEnabled = false;
+    fatalityCtx.clearRect(0, 0, fatalityCanvas.width, fatalityCanvas.height);
+    fatalityCtx.save();
+    if (fatalityFx.shake > 0) {
+      fatalityCtx.translate((Math.random() * 2 - 1) * fatalityFx.shake * 0.5, (Math.random() * 2 - 1) * fatalityFx.shake * 0.5);
+      fatalityFx.shake = Math.max(0, fatalityFx.shake - dt * 30);
+    }
+    fatalityCtx.drawImage(fatalityBgCanvas, 0, 0);
+    fatalityCtx.fillStyle = 'rgba(0,0,0,0.4)';
+    fatalityCtx.fillRect(0, 0, fatalityCanvas.width, fatalityCanvas.height);
+    fatalityState.clip.draw(fatalityCtx, fatalityState.x, fatalityState.y, t, dt, fatalityState.killerSprite);
+    fatalityCtx.restore();
+
+    fatalityState.raf = requestAnimationFrame(frame);
+  }
+  fatalityState.raf = requestAnimationFrame(frame);
+}
+
 async function gameOver() {
   state.running = false;
   GameAudio.stopBeamHum();
   GameAudio.stopFlameHiss();
   GameAudio.stopHeartbeat();
   GameAudio.stopAllVoiceLines();
-  GameAudio.playGameOver();
-  gameScreen.classList.add('hidden');
-  gameOverScreen.classList.remove('hidden');
 
-  // Run stats.
+  // Run stats - just DOM text writes into the still-hidden RUN OVER card,
+  // safe to do immediately regardless of when that card is actually shown.
   const stats = state.stats;
   const secs = Math.max(0, Math.floor((performance.now() - stats.startedAt) / 1000));
   document.getElementById('gs-wave').textContent = state.wave;
@@ -4223,8 +4586,9 @@ async function gameOver() {
   document.getElementById('gs-bosses').textContent = stats.bosses;
   document.getElementById('gs-time').textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 
-  // SLAIN BY - name and sprite of whatever landed the killing blow, plus a
-  // spoken taunt in that enemy's own voice.
+  // SLAIN BY - name and sprite of whatever landed the killing blow. The
+  // taunt audio itself is scheduled later, relative to when the card
+  // actually appears (after the fatality clip), not to the moment of death.
   const killer = state.lastHitBy || 'boss';
   document.getElementById('go-killer-name').textContent = killer === 'boss' ? 'THE WARLORD' : killer.toUpperCase();
   const kc = document.getElementById('go-killer-canvas');
@@ -4232,21 +4596,9 @@ async function gameOver() {
   kctx.imageSmoothingEnabled = false;
   kctx.clearRect(0, 0, kc.width, kc.height);
   kctx.drawImage(SPRITES[killer] || SPRITES.enemy, 4, 4, kc.width - 8, kc.height - 8);
-  const tauntPool = ENEMY_AUDIO[killer]?.aggro;
-  if (tauntPool) {
-    const urls = Object.values(tauntPool);
-    goTimeouts.push(setTimeout(() => GameAudio.playVoiceLine(urls[Math.floor(Math.random() * urls.length)], true), 700));
-  }
 
-  // Narrator epitaph - shown as text immediately, spoken after the killer's
-  // taunt has had room to land.
   const ei = Math.floor(Math.random() * GAMEOVER_EPITAPHS.lines.length);
   document.getElementById('go-epitaph').textContent = `"${GAMEOVER_EPITAPHS.lines[ei]}"`;
-  goTimeouts.push(setTimeout(() => {
-    goAudio = new Audio(`/audio/epitaph_${ei + 1}.mp3`);
-    goAudio.volume = 0.95;
-    goAudio.play().catch(() => {});
-  }, 2800));
 
   // Chat's Verdict - crown the run's most helpful and most hostile viewers.
   const byViewer = state.chatReport.byViewer;
@@ -4262,18 +4614,13 @@ async function gameOver() {
   document.getElementById('ga-saboteur').textContent = saboteur || 'nobody';
   document.getElementById('ga-saboteur-n').textContent = saboteur ? `${byViewer[saboteur].chaos} attacks` : 'a peaceful chat';
 
-  // Letter grade + score count-up.
+  // Letter grade.
   const rank = scoreRank(state.score);
   const rankEl = document.getElementById('go-rank');
   rankEl.textContent = rank.letter;
   rankEl.style.color = rank.color;
   rankEl.style.borderColor = rank.color;
   rankEl.style.textShadow = `0 0 18px ${rank.color}`;
-  // Retrigger the stamp-in animation on every death, not just the first.
-  rankEl.style.animation = 'none';
-  void rankEl.offsetWidth;
-  rankEl.style.animation = '';
-  animateScoreCountUp(document.getElementById('final-score'), state.score);
 
   // Personal best, tracked per Blaze account in this browser.
   const bestKey = `fotb_best_${me?.username || 'anon'}`;
@@ -4287,21 +4634,45 @@ async function gameOver() {
   const placeEl = document.getElementById('go-place');
   placeEl.classList.add('hidden');
 
-  try {
-    const res = await fetch('/api/leaderboard', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ score: state.score }),
-    });
-    const { top10, rank: place } = await res.json();
+  // Kick off the leaderboard submission now - no reason to wait on the
+  // fatality clip for a network round-trip that can resolve in parallel.
+  const leaderboardPromise = fetch('/api/leaderboard', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ score: state.score }),
+  }).then((res) => res.json()).catch(() => ({ top10: [], rank: null }));
+
+  // Everything above just populated hidden DOM - the actual reveal (screen
+  // swap, jingle, retriggered stamp-in animation, taunt/epitaph audio,
+  // leaderboard render) waits for the fatality clip to finish or be skipped.
+  playFatality(killer, async () => {
+    gameScreen.classList.add('hidden');
+    gameOverScreen.classList.remove('hidden');
+    GameAudio.playGameOver();
+
+    rankEl.style.animation = 'none';
+    void rankEl.offsetWidth;
+    rankEl.style.animation = '';
+    animateScoreCountUp(document.getElementById('final-score'), state.score);
+
+    const tauntPool = ENEMY_AUDIO[killer]?.aggro;
+    if (tauntPool) {
+      const urls = Object.values(tauntPool);
+      goTimeouts.push(setTimeout(() => GameAudio.playVoiceLine(urls[Math.floor(Math.random() * urls.length)], true), 700));
+    }
+    goTimeouts.push(setTimeout(() => {
+      goAudio = new Audio(`/audio/epitaph_${ei + 1}.mp3`);
+      goAudio.volume = 0.95;
+      goAudio.play().catch(() => {});
+    }, 2800));
+
+    const { top10, rank: place } = await leaderboardPromise;
     if (place) {
       placeEl.textContent = `You placed #${place}`;
       placeEl.classList.remove('hidden');
     }
-    renderLeaderboard(top10);
-  } catch {
-    renderLeaderboard([]);
-  }
+    renderLeaderboard(top10 || []);
+  });
 }
 
 function renderLeaderboard(entries) {
