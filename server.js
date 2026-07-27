@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const fetch = require('node-fetch');
 const { Server } = require('socket.io');
 const { io: ioClient } = require('socket.io-client');
+const FileStore = require('session-file-store')(session);
 
 const {
   BLAZE_CLIENT_ID,
@@ -33,10 +34,16 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 const sessionMiddleware = session({
+  // Sessions (including Blaze OAuth tokens) are written to disk so a
+  // pm2 restart - which happens on every deploy - doesn't log every
+  // connected viewer out. The default MemoryStore lives only in the
+  // Node process's RAM, so it was wiped on every restart, which is why
+  // the chat integration always came back as "not logged in with Blaze".
+  store: new FileStore({ path: path.join(__dirname, 'sessions'), logFn: () => {} }),
   secret: SESSION_SECRET || 'dev-secret-change-me',
   resave: false,
   saveUninitialized: false,
-  cookie: { httpOnly: true, sameSite: 'lax' },
+  cookie: { httpOnly: true, sameSite: 'lax', maxAge: 30 * 24 * 60 * 60 * 1000 },
 });
 app.use(sessionMiddleware);
 
