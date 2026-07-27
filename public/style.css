@@ -329,7 +329,8 @@ html, body {
 .hud-name { font-weight: 700; font-size: 14px; }
 .hud-label { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 1px; }
 
-.hud-center { display: flex; align-items: center; gap: 10px; }
+.hud-center { display: flex; flex-direction: column; gap: 4px; }
+.hud-bar-row { display: flex; align-items: center; gap: 10px; }
 .health-track {
   width: 220px; height: 10px;
   background: #1f2229;
@@ -343,6 +344,33 @@ html, body {
   transition: width 0.2s ease;
 }
 #health-text { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+/* Rage meter - visually distinct from HP: a deep orange/red gradient
+   (vs. health's magenta/gold), and it glows and pulses once full instead of
+   just sitting there, since a full bar means "press Q" is actually live. */
+.rage-track {
+  width: 220px; height: 7px;
+  background: #1f2229;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.rage-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #8a1a00, #ff6a1a, #ffcf3d);
+  transition: width 0.2s ease;
+}
+.rage-track.ready {
+  box-shadow: 0 0 10px rgba(255, 106, 26, 0.7);
+  animation: ragePulse 1s ease-in-out infinite;
+}
+@keyframes ragePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+#rage-text { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+#rage-text.ready { color: #ffcf3d; font-weight: 700; }
+.rage-track.denied { animation: defDenied 0.32s ease; }
 
 .score {
   font-family: var(--mono);
@@ -1136,6 +1164,8 @@ html, body {
   .avatar { width: 26px; height: 26px; }
   .health-track { width: 100px; }
   #health-text { font-size: 8px; }
+  .rage-track { width: 100px; }
+  #rage-text { font-size: 8px; }
   .score { font-size: 12px; }
 
   .pill { font-size: 9px; padding: 5px 9px; }

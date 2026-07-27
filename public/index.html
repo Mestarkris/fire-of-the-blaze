@@ -118,6 +118,7 @@
       <div class="rule"><span class="tag">Shield</span> Shift key for a brief invincibility window, on a cooldown (or the shield button on mobile)</div>
       <div class="rule"><span class="tag">Mine</span> E or M plants a proximity bomb at your feet (or the mine button on mobile) - one every 10s, up to 6 on the field</div>
       <div class="rule"><span class="tag">Defenders</span> keys 1-4 (or tap their slots) summon a backup fighter for 15s - each has its own weapon, a one-shot power on arrival, and its own long cooldown</div>
+      <div class="rule"><span class="tag">Ultimate</span> kills fill the orange RAGE bar - at 100%, press Q for a screen-clearing blast</div>
       <div class="rule"><span class="tag">Pause</span> Esc or P</div>
       <div class="rule"><span class="tag">Chat</span> your live Blaze chat is the game master - !spawn, !heal, !shield, !slow, !taunt, follows, subs, votes, and tips all affect the run in real time</div>
       <div class="rule"><span class="tag">Vibe</span> the HELP/CHAOS gauge tracks whether chat's been helping or piling on - lean far enough either way and it starts to matter</div>
@@ -136,8 +137,14 @@
       </div>
     </div>
     <div class="hud-center">
-      <div class="health-track"><div id="health-fill" class="health-fill"></div></div>
-      <span id="health-text">100 HP</span>
+      <div class="hud-bar-row">
+        <div class="health-track"><div id="health-fill" class="health-fill"></div></div>
+        <span id="health-text">100 HP</span>
+      </div>
+      <div class="hud-bar-row">
+        <div class="rage-track"><div id="rage-fill" class="rage-fill"></div></div>
+        <span id="rage-text">RAGE 0%</span>
+      </div>
     </div>
     <div class="hud-right">
       <button id="pause-btn" class="mute-btn" aria-label="Pause">&#9208;</button>

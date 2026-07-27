@@ -188,6 +188,54 @@ const GameAudio = (() => {
     flameGain = null;
   }
 
+  // ---- Second Wind heartbeat (see the critical-HP system in game.js) -----
+  // Two low thump-thumps per cycle, self-scheduled via setTimeout (a
+  // rhythmic one-shot pattern doesn't fit the continuous-oscillator model
+  // startBeamHum/startFlameHiss use above). The cycle length is driven by
+  // heartbeatRate, which the caller updates live as HP drops further -
+  // read fresh on every scheduled beat, so the tempo ramps smoothly rather
+  // than only changing on the next full cycle.
+  let heartbeatTimer = null;
+  let heartbeatRate = 1;
+
+  function playThump(t, gain, freq) {
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, t);
+    osc.frequency.exponentialRampToValueAtTime(freq * 0.55, t + 0.15);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+    osc.connect(g).connect(sfxGain);
+    osc.start(t);
+    osc.stop(t + 0.2);
+  }
+
+  function scheduleHeartbeat() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    playThump(t, 0.5, 65);
+    playThump(t + 0.14, 0.36, 58);
+    const cycleMs = (900 / heartbeatRate);
+    heartbeatTimer = setTimeout(scheduleHeartbeat, cycleMs);
+  }
+
+  function startHeartbeat() {
+    if (!ctx || heartbeatTimer) return;
+    scheduleHeartbeat();
+  }
+
+  function setHeartbeatRate(rate) {
+    heartbeatRate = rate;
+  }
+
+  function stopHeartbeat() {
+    if (heartbeatTimer) {
+      clearTimeout(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  }
+
   // ---- pre-generated ElevenLabs voice line playback -----------------------
   // Real audio files (see scripts/generate-voices.js), one per dialogue line,
   // preloaded once at game start. Only ONE plays at a time across the whole
@@ -340,6 +388,9 @@ const GameAudio = (() => {
     stopBeamHum,
     startFlameHiss,
     stopFlameHiss,
+    startHeartbeat,
+    stopHeartbeat,
+    setHeartbeatRate,
     preloadVoiceLines,
     playVoiceLine,
     stopAllVoiceLines,

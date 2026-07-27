@@ -645,7 +645,7 @@ window.addEventListener('resize', resizeCanvas);
 // ---------------------------------------------------------------------------
 
 const state = {
-  player: { x: 0, y: 0, r: 16, hp: 100, maxHp: 100, speed: 260, shielded: false, shieldUntil: 0, facingLeft: false, kx: 0, ky: 0, vx: 0, vy: 0, gunAngle: 0, dotUntil: 0, dotDps: 0, chillUntil: 0, chillMul: 1, auraUntil: 0 },
+  player: { x: 0, y: 0, r: 16, hp: 100, maxHp: 100, speed: 260, shielded: false, shieldUntil: 0, facingLeft: false, kx: 0, ky: 0, vx: 0, vy: 0, gunAngle: 0, dotUntil: 0, dotDps: 0, chillUntil: 0, chillMul: 1, auraUntil: 0, rage: 0 },
   bullets: [],
   enemyProjectiles: [],
   enemies: [],
@@ -708,7 +708,115 @@ const state = {
   // Chat's Verdict - per-viewer tallies of helpful vs hostile events, used
   // to crown the run's CHAT GUARDIAN and CHAT SABOTEUR on the death screen.
   chatReport: { byViewer: {} },
+  // Second Wind - true while hp is below SECOND_WIND_THRESHOLD of max. See
+  // the block near the top of update() for entry/exit edge-detection.
+  secondWindActive: false,
+  // Ultimate windup - {startedAt, duration} while charging, null otherwise.
+  // See loop() for the global slow-mo this drives.
+  ultimateWindup: null,
+  // 0-1 full-screen white flash at the moment the blast lands, decaying.
+  ultimateFlash: 0,
+  // Random chaos events (meteor/lightning/collapse) - at most one active at
+  // a time. See triggerChaosEvent()/updateChaosEvent().
+  chaosEvent: null,
+  chaosEventTimer: 0,
+  // Boss death cinematics - separate from state.enemies (a boss is removed
+  // from state.enemies the instant its hp hits 0, same frame as any other
+  // enemy, so wave-clear/targeting are never blocked) and purely cosmetic:
+  // a shrinking/flashing/dissolving copy that renders for ~1.3s. See
+  // triggerBossDeathSequence()/updateBossDeathFx().
+  bossDeathFx: [],
 };
+
+// ---------------------------------------------------------------------------
+// Second Wind - a comeback mechanic, not a punishment: drop below 15% HP and
+// the player gets +25% damage for as long as they stay critical, with a red
+// vignette (heaviest at the screen edges, clear over the arena's center so
+// nothing gets obscured) and an accelerating heartbeat that both read the
+// same underlying "how close to death" intensity. It turns off the instant
+// HP climbs back above the threshold via any healing source.
+// ---------------------------------------------------------------------------
+const SECOND_WIND_THRESHOLD = 0.15;
+const SECOND_WIND_DAMAGE_BONUS = 1.25;
+
+function secondWindDamageMul() {
+  return state.secondWindActive ? SECOND_WIND_DAMAGE_BONUS : 1;
+}
+
+// 0 right at the threshold, ramping to 1 as hp approaches 0 - shared by the
+// heartbeat tempo and the vignette pulse speed so both quicken together.
+function secondWindIntensity() {
+  if (!state.secondWindActive) return 0;
+  const p = state.player;
+  return Math.min(1, Math.max(0, 1 - (p.hp / p.maxHp) / SECOND_WIND_THRESHOLD));
+}
+
+// ---------------------------------------------------------------------------
+// Rage meter & Ultimate (Q) - every kill fills state.player.rage (regular
+// enemies +5, elites/bosses +20 - a run of regular kills alone fills the
+// 100-point bar in exactly 20 kills, within the 15-25 target). At 100, Q
+// triggers a brief windup (global slow-motion - see loop()) then a
+// screen-clearing AOE blast centered on the player, and resets rage to 0.
+// Being kill-gated rather than time-gated, "cooldown" is just refilling the
+// bar through play - no separate timer needed.
+// ---------------------------------------------------------------------------
+const ULTIMATE_WINDUP_MS = 400;
+const ULTIMATE_RADIUS = 480;
+const ULTIMATE_SLOWMO_SCALE = 0.12;
+
+function tryActivateUltimate() {
+  if (!state.running || state.paused) return;
+  if (state.ultimateWindup) return;
+  if (state.player.rage < 100) {
+    flashRageBar();
+    return;
+  }
+  state.ultimateWindup = { startedAt: performance.now(), duration: ULTIMATE_WINDUP_MS };
+}
+
+function flashRageBar() {
+  const track = document.querySelector('.rage-track');
+  track.classList.remove('denied');
+  void track.offsetWidth; // restart the animation if it was mid-flash
+  track.classList.add('denied');
+  GameAudio.playPlayerHit();
+}
+
+// tanky elites/bosses take heavy fixed damage rather than a guaranteed kill,
+// so the Ultimate reads as "screen-clearing" against the regular horde
+// without trivializing a boss or heavy-elite fight outright.
+function triggerUltimateBlast() {
+  const p = state.player;
+  triggerShake(22);
+  triggerHitstop(140);
+  state.ultimateFlash = 1;
+  spawnParticles(p.x, p.y, '#fff2a0');
+  spawnParticles(p.x, p.y, '#ff3d7f');
+  spawnParticles(p.x, p.y, '#F0B90B');
+  state.enemies.forEach((e) => {
+    if (dist(e, p) >= ULTIMATE_RADIUS) return;
+    const tanky = e.boss || ELITE_ATTACK[e.type]?.tanky;
+    e.hp -= (tanky ? 18 : 999) * enemyMarkMul(e);
+    e.hitFlash = 1;
+    spawnParticles(e.x, e.y, e.color);
+    applyKnockback(e, Math.atan2(e.y - p.y, e.x - p.x), tanky ? 150 : 300);
+    if (e.hp <= 0) triggerShake(e.boss ? 8 : 3);
+  });
+  state.player.rage = 0;
+  pushTicker('ULTIMATE', 'unleashed!', true);
+}
+
+function updateRageHud() {
+  const p = state.player;
+  const fill = document.getElementById('rage-fill');
+  const text = document.getElementById('rage-text');
+  const pct = Math.min(100, p.rage);
+  fill.style.width = pct + '%';
+  const ready = pct >= 100 && !state.ultimateWindup;
+  fill.parentElement.classList.toggle('ready', ready);
+  text.classList.toggle('ready', ready);
+  text.textContent = ready ? 'ULTIMATE READY - Q' : `RAGE ${Math.floor(pct)}%`;
+}
 
 // 20s of invulnerability needs a cooldown comfortably longer than the
 // duration - the old 12s cooldown would have meant the shield could be
@@ -745,6 +853,126 @@ function tensionPlayerDamageMul() {
   if (state.tension >= TENSION_HELP_THRESHOLD) return 1;
   const t = (TENSION_HELP_THRESHOLD - state.tension) / TENSION_HELP_THRESHOLD;
   return 1 + t * TENSION_MAX_BONUS;
+}
+
+// ---------------------------------------------------------------------------
+// Random chaos events - environmental danger, not enemy attacks, so they
+// use a distinct warning language (red/white telegraphs) and hit player AND
+// enemies alike. At most one active at a time (triggerChaosEvent no-ops
+// otherwise); the gap timer only counts down while none is active, and gets
+// re-rolled to 20-35s after the current one finishes.
+// ---------------------------------------------------------------------------
+const CHAOS_WARN_COLOR = 'rgba(255,60,60,';
+
+function triggerChaosEvent() {
+  if (state.chaosEvent) return;
+  const type = ['meteor', 'lightning', 'collapse'][Math.floor(Math.random() * 3)];
+  if (type === 'meteor') {
+    const x = 100 + Math.random() * (canvas.width - 200);
+    const y = 160 + Math.random() * (canvas.height - 280);
+    state.chaosEvent = { type, phase: 'telegraph', x, y, r: 95, telegraphDur: 1.2, elapsed: 0 };
+    pushTicker('WARNING', 'meteor incoming - move!', true);
+  } else if (type === 'lightning') {
+    const count = 3 + Math.floor(Math.random() * 2);
+    const strikes = [];
+    for (let i = 0; i < count; i++) {
+      strikes.push({
+        x: 100 + Math.random() * (canvas.width - 200),
+        y: 160 + Math.random() * (canvas.height - 280),
+        startAt: i * 0.55,
+        struck: false,
+      });
+    }
+    state.chaosEvent = { type, strikes, r: 55, telegraphDur: 0.5, elapsed: 0 };
+    pushTicker('WARNING', 'lightning storm!', true);
+  } else {
+    const x = 120 + Math.random() * (canvas.width - 240);
+    const y = 180 + Math.random() * (canvas.height - 300);
+    state.chaosEvent = { type, phase: 'cracking', x, y, r: 110, crackDur: 2.5, activeDur: 6, elapsed: 0 };
+    pushTicker('WARNING', 'the ground is giving way!', true);
+  }
+}
+
+// Returns true if this killed the player, so update() can bail out the same
+// way every other damage source does.
+function updateChaosEvent(dt) {
+  const ce = state.chaosEvent;
+  if (!ce) return false;
+  const p = state.player;
+  ce.elapsed += dt;
+  let killed = false;
+
+  if (ce.type === 'meteor') {
+    if (ce.phase === 'telegraph' && ce.elapsed >= ce.telegraphDur) {
+      const dmg = 45;
+      if (!p.shielded && dist(ce, p) < ce.r + p.r) {
+        p.hp -= dmg;
+        state.lastHitBy = 'meteor';
+        onPlayerDamaged();
+        updateHud();
+        applyKnockback(p, Math.atan2(p.y - ce.y, p.x - ce.x), 260);
+        if (p.hp <= 0) killed = true;
+      }
+      state.enemies.forEach((e) => {
+        if (dist(ce, e) < ce.r + e.r) {
+          e.hp -= dmg * enemyMarkMul(e);
+          e.hitFlash = 1;
+          applyKnockback(e, Math.atan2(e.y - ce.y, e.x - ce.x), e.boss ? 150 : 300);
+        }
+      });
+      spawnParticles(ce.x, ce.y, '#ff6a1a');
+      spawnParticles(ce.x, ce.y, '#ffffff');
+      spawnParticles(ce.x, ce.y, '#ff3d3d');
+      triggerShake(16);
+      triggerHitstop(100);
+      state.chaosEvent = null;
+    }
+  } else if (ce.type === 'lightning') {
+    ce.strikes.forEach((s) => {
+      if (s.struck || ce.elapsed < s.startAt + ce.telegraphDur) return;
+      s.struck = true;
+      const dmg = 28;
+      if (!p.shielded && dist(s, p) < ce.r + p.r) {
+        p.hp -= dmg;
+        state.lastHitBy = 'lightning';
+        onPlayerDamaged();
+        updateHud();
+        applyKnockback(p, Math.atan2(p.y - s.y, p.x - s.x), 160);
+        if (p.hp <= 0) killed = true;
+      }
+      state.enemies.forEach((e) => {
+        if (dist(s, e) < ce.r + e.r) {
+          e.hp -= dmg * enemyMarkMul(e);
+          e.hitFlash = 1;
+        }
+      });
+      spawnParticles(s.x, s.y, '#9dfbff');
+      spawnParticles(s.x, s.y, '#ffffff');
+      triggerShake(9);
+      triggerHitstop(60);
+    });
+    if (ce.strikes.every((s) => s.struck)) state.chaosEvent = null;
+  } else if (ce.type === 'collapse') {
+    if (ce.phase === 'cracking' && ce.elapsed >= ce.crackDur) {
+      ce.phase = 'active';
+      ce.elapsed = 0;
+      triggerShake(8);
+    } else if (ce.phase === 'active') {
+      const dps = 16;
+      if (!p.shielded && dist(ce, p) < ce.r + p.r) {
+        p.hp -= dps * dt;
+        state.lastHitBy = 'collapse';
+        updateHud();
+        if (Math.random() < 0.15) spawnParticles(p.x, p.y, '#ff6a1a');
+        if (p.hp <= 0) killed = true;
+      }
+      state.enemies.forEach((e) => {
+        if (dist(ce, e) < ce.r + e.r) e.hp -= dps * dt * enemyMarkMul(e);
+      });
+      if (ce.elapsed >= ce.activeDur) state.chaosEvent = null;
+    }
+  }
+  return killed;
 }
 
 // ---------------------------------------------------------------------------
@@ -1228,7 +1456,7 @@ function resetState() {
   document.getElementById('pause-btn').innerHTML = '&#9208;';
   // Make sure no leftover dialogue from a previous run bleeds into this one.
   GameAudio.stopAllVoiceLines();
-  state.player = { x: canvas.width / 2, y: canvas.height / 2, r: 16, hp: 100, maxHp: 100, speed: 260, shielded: false, shieldUntil: 0, facingLeft: false, kx: 0, ky: 0, vx: 0, vy: 0, gunAngle: 0, dotUntil: 0, dotDps: 0, chillUntil: 0, chillMul: 1, auraUntil: 0 };
+  state.player = { x: canvas.width / 2, y: canvas.height / 2, r: 16, hp: 100, maxHp: 100, speed: 260, shielded: false, shieldUntil: 0, facingLeft: false, kx: 0, ky: 0, vx: 0, vy: 0, gunAngle: 0, dotUntil: 0, dotDps: 0, chillUntil: 0, chillMul: 1, auraUntil: 0, rage: 0 };
   state.bullets = [];
   state.enemyProjectiles = [];
   state.enemies = [];
@@ -1274,6 +1502,13 @@ function resetState() {
   state.stats = { kills: 0, bosses: 0, bestStreak: 0, startedAt: performance.now() };
   state.lastHitBy = null;
   state.chatReport = { byViewer: {} };
+  state.secondWindActive = false;
+  GameAudio.stopHeartbeat();
+  state.ultimateWindup = null;
+  state.ultimateFlash = 0;
+  state.chaosEvent = null;
+  state.chaosEventTimer = 20 + Math.random() * 15;
+  state.bossDeathFx = [];
   clearGameOverVoices();
   lastLineIndex = {};
   lastSpeechBubbleAt = 0;
@@ -1308,8 +1543,17 @@ function togglePause() {
     state.mouse.down = false;
     GameAudio.stopBeamHum();
     GameAudio.stopFlameHiss();
+    // The heartbeat self-schedules via its own timer rather than being
+    // driven from update() each frame (unlike beam/flame hum), so it
+    // wouldn't otherwise go quiet just because update() stops running.
+    GameAudio.stopHeartbeat();
     pauseScreen.classList.remove('hidden');
   } else {
+    // Edge-detection in update() only (re)starts the heartbeat on a
+    // false->true transition, which won't fire here since
+    // secondWindActive never changed while paused - restart it explicitly
+    // if the player is still critical.
+    if (state.secondWindActive) GameAudio.startHeartbeat();
     pauseScreen.classList.add('hidden');
   }
 }
@@ -1319,6 +1563,7 @@ function quitToMenu() {
   state.paused = false;
   GameAudio.stopBeamHum();
   GameAudio.stopFlameHiss();
+  GameAudio.stopHeartbeat();
   GameAudio.stopAllVoiceLines();
   // Nothing is watching the arena anymore - drop the live Blaze connection
   // instead of leaving chat events free to keep mutating hidden game state
@@ -1354,6 +1599,7 @@ window.addEventListener('keyup', (e) => (state.keys[e.key.toLowerCase()] = false
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Shift' && !e.repeat) tryActivateShieldAbility();
   if ((e.key.toLowerCase() === 'e' || e.key.toLowerCase() === 'm') && !e.repeat) tryPlantMine();
+  if (e.key.toLowerCase() === 'q' && !e.repeat) tryActivateUltimate();
 });
 canvas.addEventListener('mousemove', (e) => {
   state.mouse.x = e.clientX;
@@ -2146,7 +2392,7 @@ function updateElectricBeam(dt) {
     state.beamCooldown -= dt;
     if (state.beamCooldown <= 0) {
       state.beamCooldown = 0.06;
-      best.hp -= WEAPON_DEFS.electric.damage * tensionPlayerDamageMul() * enemyMarkMul(best);
+      best.hp -= WEAPON_DEFS.electric.damage * tensionPlayerDamageMul() * secondWindDamageMul() * enemyMarkMul(best);
       best.hitFlash = 1;
       spawnParticles(best.x, best.y, '#4dd8ff');
       if (best.hp <= 0) {
@@ -2186,7 +2432,7 @@ function updateFlamethrower(dt) {
       let diff = Math.abs(angTo - angle);
       if (diff > Math.PI) diff = Math.PI * 2 - diff;
       if (diff > halfAngle) return;
-      e.hp -= WEAPON_DEFS.flamethrower.damage * tensionPlayerDamageMul() * enemyMarkMul(e);
+      e.hp -= WEAPON_DEFS.flamethrower.damage * tensionPlayerDamageMul() * secondWindDamageMul() * enemyMarkMul(e);
       e.hitFlash = 1;
       spawnParticles(e.x, e.y, '#ff9d3d');
       applyKnockback(e, angTo, 20);
@@ -2216,6 +2462,39 @@ function explodeAt(x, y, radius, damage) {
       if (e.hp <= 0) triggerShake(e.boss ? 8 : 2);
     }
   });
+}
+
+// ---------------------------------------------------------------------------
+// Cinematic boss kill - a boss is removed from state.enemies the instant its
+// hp hits 0, same frame as any other death (so wave-clear/targeting/scoring
+// are never blocked - other enemies keep fighting normally through this),
+// but instead of just vanishing it leaves a purely cosmetic entry in
+// state.bossDeathFx: a ~1.3s shrink/flash/particle-dissolve, plus a longer
+// hitstop and a brief camera punch-in (see the render() zoom transform)
+// centered on the death position. The existing death dialogue/voice line is
+// triggered separately in the same cleanup pass and is untouched by this.
+// ---------------------------------------------------------------------------
+function triggerBossDeathSequence(e) {
+  state.bossDeathFx.push({ x: e.x, y: e.y, startedAt: performance.now(), duration: 1300 });
+  triggerShake(18);
+  triggerHitstop(350);
+}
+
+function updateBossDeathFx(dt) {
+  const nowMs = performance.now();
+  state.bossDeathFx.forEach((fx) => {
+    if (Math.random() < dt * 18) spawnParticles(fx.x, fx.y, '#ff3d7f');
+  });
+  state.bossDeathFx = state.bossDeathFx.filter((fx) => nowMs - fx.startedAt < fx.duration);
+}
+
+// Zoom curve for the render()-time camera punch-in: quick zoom in, brief
+// hold, ease back out. Returns 1 (no zoom) once t is past 1.
+function bossZoomFactor(t) {
+  if (t < 0.2) return 1 + (t / 0.2) * 0.55;
+  if (t < 0.5) return 1.55;
+  if (t < 1) return 1.55 - ((t - 0.5) / 0.5) * 0.55;
+  return 1;
 }
 
 function updateWeaponHud() {
@@ -2382,10 +2661,30 @@ let lastTime = performance.now();
 
 function loop(now) {
   if (!state.running) return;
-  const dt = Math.min(0.05, (now - lastTime) / 1000);
+  let dt = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
 
-  if (!state.paused) update(dt, now);
+  if (!state.paused) {
+    // Ultimate windup - a brief global slow-motion scaling dt for this
+    // frame's whole update() call. Player/enemy/bullet motion, particle
+    // decay, etc. all read it (dt is the single time source they integrate
+    // against), so everything visibly slows together; keyboard/mouse input
+    // itself isn't gated by dt at all (the listeners run independently -
+    // see the Input section above), so nothing about responsiveness is
+    // delayed, only the resulting simulated motion looks slowed. Cooldowns
+    // and other absolute-timestamp state (compared against performance.now()
+    // rather than accumulated dt) are unaffected either way.
+    if (state.ultimateWindup) {
+      const elapsed = now - state.ultimateWindup.startedAt;
+      if (elapsed >= state.ultimateWindup.duration) {
+        triggerUltimateBlast();
+        state.ultimateWindup = null;
+      } else {
+        dt *= ULTIMATE_SLOWMO_SCALE;
+      }
+    }
+    update(dt, now);
+  }
   render();
 
   requestAnimationFrame(loop);
@@ -2411,6 +2710,22 @@ function update(dt, now) {
   p.shielded = now < p.shieldUntil;
   updateShieldHud();
   updateMineHud();
+
+  // Second Wind - derived fresh from current hp every frame (like shielded
+  // above), so any healing source immediately exits critical state. Only
+  // the transition edges trigger anything (heartbeat start/stop, ticker);
+  // the tempo itself is refreshed continuously while active.
+  const wasSecondWind = state.secondWindActive;
+  state.secondWindActive = p.hp > 0 && p.hp / p.maxHp < SECOND_WIND_THRESHOLD;
+  if (state.secondWindActive && !wasSecondWind) {
+    GameAudio.startHeartbeat();
+    pushTicker('SECOND WIND', 'critical - damage up, hold the line!', true);
+  } else if (!state.secondWindActive && wasSecondWind) {
+    GameAudio.stopHeartbeat();
+  }
+  if (state.secondWindActive) {
+    GameAudio.setHeartbeatRate(1 + secondWindIntensity() * 1.4);
+  }
 
   // The run's "story clock" - wave timer, wave-transition banner, background
   // tier cross-fade, and health-pickup scheduling - keeps advancing through a
@@ -2456,8 +2771,27 @@ function update(dt, now) {
   updateTensionHud();
   // Cooldown countdowns keep ticking on the HUD even through hitstop frames.
   updateDefenderHud();
+  updateRageHud();
   // Per-frame so the wave kill counter tracks spawns, not just kills.
   updateHud();
+
+  // Chaos-event gap timer - only counts down while no event is active (see
+  // triggerChaosEvent), so this is "20-35s between events" rather than a
+  // fixed cadence regardless of how long the current one runs. Kept
+  // ungated like the wave timer so a hitstop-heavy fight can't indefinitely
+  // stall the next event.
+  if (!state.chaosEvent) {
+    state.chaosEventTimer -= dt;
+    if (state.chaosEventTimer <= 0) {
+      triggerChaosEvent();
+      state.chaosEventTimer = 20 + Math.random() * 15;
+    }
+  }
+
+  // Ultimate flash decays through hitstop too, same reasoning as screen
+  // shake at the top of this function - the freeze-frame should still read
+  // as a visible impact.
+  if (state.ultimateFlash > 0) state.ultimateFlash = Math.max(0, state.ultimateFlash - dt * 2.5);
 
   // Hitstop: freeze movement/collision/AI for a few real milliseconds on an
   // impactful hit. Input keeps being captured by the listeners above (they
@@ -2566,7 +2900,7 @@ function update(dt, now) {
           const a = angle + offset;
           state.bullets.push({
             x: p.x, y: p.y, vx: Math.cos(a) * 620, vy: Math.sin(a) * 620,
-            r: 4, life: 1.2, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
+            r: 4, life: 1.2, damage: weaponDef.damage * tensionPlayerDamageMul() * secondWindDamageMul(), color: weaponDef.color,
           });
         });
       } else if (weaponDef.mode === 'shotgun') {
@@ -2574,44 +2908,44 @@ function update(dt, now) {
           const a = angle + offset;
           state.bullets.push({
             x: p.x, y: p.y, vx: Math.cos(a) * 560, vy: Math.sin(a) * 560,
-            r: 4, life: 0.35, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
+            r: 4, life: 0.35, damage: weaponDef.damage * tensionPlayerDamageMul() * secondWindDamageMul(), color: weaponDef.color,
             knockbackMul: 1.6,
           });
         });
       } else if (weaponDef.mode === 'rocket') {
         state.bullets.push({
           x: p.x, y: p.y, vx: Math.cos(angle) * 420, vy: Math.sin(angle) * 420,
-          r: 6, life: 1.6, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
+          r: 6, life: 1.6, damage: weaponDef.damage * tensionPlayerDamageMul() * secondWindDamageMul(), color: weaponDef.color,
           explosive: true,
         });
       } else if (weaponDef.mode === 'ricochet') {
         state.bullets.push({
           x: p.x, y: p.y, vx: Math.cos(angle) * 620, vy: Math.sin(angle) * 620,
-          r: 4, life: 2.5, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
+          r: 4, life: 2.5, damage: weaponDef.damage * tensionPlayerDamageMul() * secondWindDamageMul(), color: weaponDef.color,
           bounces: 2, hitSet: new Set(),
         });
       } else if (weaponDef.mode === 'ice') {
         state.bullets.push({
           x: p.x, y: p.y, vx: Math.cos(angle) * 560, vy: Math.sin(angle) * 560,
-          r: 4, life: 1.3, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
+          r: 4, life: 1.3, damage: weaponDef.damage * tensionPlayerDamageMul() * secondWindDamageMul(), color: weaponDef.color,
           freeze: true,
         });
       } else if (weaponDef.mode === 'poison') {
         state.bullets.push({
           x: p.x, y: p.y, vx: Math.cos(angle) * 520, vy: Math.sin(angle) * 520,
-          r: 4, life: 1.4, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
+          r: 4, life: 1.4, damage: weaponDef.damage * tensionPlayerDamageMul() * secondWindDamageMul(), color: weaponDef.color,
           poison: true,
         });
       } else if (weaponDef.mode === 'laser') {
         state.bullets.push({
           x: p.x, y: p.y, vx: Math.cos(angle) * 2600, vy: Math.sin(angle) * 2600,
-          r: 5, life: 0.4, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
+          r: 5, life: 0.4, damage: weaponDef.damage * tensionPlayerDamageMul() * secondWindDamageMul(), color: weaponDef.color,
           hitSet: new Set(),
         });
       } else {
         state.bullets.push({
           x: p.x, y: p.y, vx: Math.cos(angle) * 620, vy: Math.sin(angle) * 620,
-          r: 4, life: 1.2, damage: weaponDef.damage * tensionPlayerDamageMul(), color: weaponDef.color,
+          r: 4, life: 1.2, damage: weaponDef.damage * tensionPlayerDamageMul() * secondWindDamageMul(), color: weaponDef.color,
         });
       }
     }
@@ -2948,6 +3282,10 @@ function update(dt, now) {
   // same frame and process more damage against an already-dead player.
   if (hazardKilledPlayer) return gameOver();
 
+  // Random chaos events - environmental, so they resolve alongside hazards
+  // rather than the enemy-attack blocks above/below.
+  if (updateChaosEvent(dt)) return gameOver();
+
   // Bullets vs obstacles
   state.bullets.forEach((b) => {
     if (b.life > 0 && insideObstacle(b.x, b.y)) {
@@ -3026,15 +3364,25 @@ function update(dt, now) {
   // Defender summons - a parallel system to the follow-ally above; both can
   // be on the field at once without touching each other's arrays or logic.
   updateDefender(dt, now);
+  updateBossDeathFx(dt);
 
   // Cleanup dead enemies -> score
   const before = state.enemies.length;
   state.enemies = state.enemies.filter((e) => {
     if (e.hp > 0) return true;
+    // Boss deaths get a cinematic sequence instead of just vanishing - the
+    // boss is still removed from state.enemies this same frame (below,
+    // like every other death), so wave-clear and targeting are unaffected;
+    // only the visual is boss-specific spectacle.
+    if (e.boss) triggerBossDeathSequence(e);
     trySpawnSpeechBubble(e, pickLine(e.type, 'death'), { big: e.boss, borderColor: e.boss ? '#ff3d7f' : '#2c303a', duration: e.boss ? 2.5 : 1.8, enemyType: e.type, moment: 'death' });
     // Marked kills (sniper defender) pay out 1.5x score on top of the 1.5x
     // damage taken - a reward for focusing what the defender called out.
     state.score += enemyMarkMul(e) > 1 ? Math.round(e.score * 1.5) : e.score;
+    // Rage: regular kills +5, elites/bosses +20 - a run of only regular
+    // kills fills the 100-point bar in exactly 20 kills.
+    const isElite = e.boss || !!ELITE_ATTACK[e.type];
+    state.player.rage = Math.min(100, state.player.rage + (isElite ? 20 : 5));
     state.killStreak += 1;
     state.stats.kills += 1;
     if (e.boss) state.stats.bosses += 1;
@@ -3327,6 +3675,21 @@ function render() {
   ctx.save();
   ctx.translate(state.shake.x, state.shake.y);
 
+  // Boss-death camera punch-in - a render-only transform (nothing in game
+  // state moves), so other enemies keep fighting normally underneath it.
+  // Only the most recent boss death drives the zoom if more than one is
+  // mid-sequence at once, so they don't stack into a double-zoom.
+  const zoomFx = state.bossDeathFx[state.bossDeathFx.length - 1];
+  if (zoomFx) {
+    const zoomT = (performance.now() - zoomFx.startedAt) / zoomFx.duration;
+    const zoom = zoomT < 1 ? bossZoomFactor(zoomT) : 1;
+    if (zoom !== 1) {
+      ctx.translate(zoomFx.x, zoomFx.y);
+      ctx.scale(zoom, zoom);
+      ctx.translate(-zoomFx.x, -zoomFx.y);
+    }
+  }
+
   drawWarBackground(ctx, now);
   drawObstacles();
 
@@ -3340,6 +3703,71 @@ function render() {
     ctx.fill();
     ctx.restore();
   });
+
+  // Random chaos events - distinct red/white "environmental danger" warning
+  // language, deliberately different from any enemy attack's color coding.
+  if (state.chaosEvent) {
+    const ce = state.chaosEvent;
+    if (ce.type === 'meteor' && ce.phase === 'telegraph') {
+      const pulse = 0.5 + 0.5 * Math.sin(now * 10);
+      ctx.save();
+      ctx.strokeStyle = CHAOS_WARN_COLOR + (0.6 + 0.3 * pulse) + ')';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([10, 6]);
+      ctx.beginPath(); ctx.arc(ce.x, ce.y, ce.r, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = `rgba(255,255,255,${0.15 * pulse})`;
+      ctx.beginPath(); ctx.arc(ce.x, ce.y, ce.r, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    } else if (ce.type === 'lightning') {
+      ce.strikes.forEach((s) => {
+        const local = ce.elapsed - s.startAt;
+        if (local < 0) return;
+        if (!s.struck) {
+          const pulse = 0.5 + 0.5 * Math.sin(now * 16);
+          ctx.save();
+          ctx.strokeStyle = CHAOS_WARN_COLOR + '0.75)';
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(s.x, s.y, ce.r * 0.6, 0, Math.PI * 2); ctx.stroke();
+          ctx.fillStyle = `rgba(255,255,255,${0.25 * pulse})`;
+          ctx.beginPath(); ctx.arc(s.x, s.y, ce.r * 0.6, 0, Math.PI * 2); ctx.fill();
+          ctx.restore();
+        } else if (local < ce.telegraphDur + 0.15) {
+          ctx.save();
+          ctx.strokeStyle = '#e0f7ff';
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.moveTo(s.x + (Math.random() - 0.5) * 10, 0);
+          ctx.lineTo(s.x, s.y);
+          ctx.stroke();
+          ctx.restore();
+        }
+      });
+    } else if (ce.type === 'collapse') {
+      ctx.save();
+      if (ce.phase === 'cracking') {
+        const t = ce.elapsed / ce.crackDur;
+        ctx.strokeStyle = CHAOS_WARN_COLOR + (0.4 + 0.4 * t) + ')';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(ce.x, ce.y, ce.r, 0, Math.PI * 2); ctx.stroke();
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.moveTo(ce.x, ce.y);
+          ctx.lineTo(ce.x + Math.cos(a) * ce.r * t, ce.y + Math.sin(a) * ce.r * t * 0.6);
+          ctx.stroke();
+        }
+      } else {
+        const pulse = 0.5 + 0.3 * Math.sin(now * 5);
+        ctx.fillStyle = `rgba(120,20,10,${0.5 + 0.2 * pulse})`;
+        ctx.beginPath(); ctx.ellipse(ce.x, ce.y, ce.r, ce.r * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = `rgba(255,90,40,${0.6 + 0.3 * pulse})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
 
   // Planted mines - steel discs with a red arming light that blinks faster
   // as the fuse runs down. Drawn under the entities so enemies walk onto them.
@@ -3483,6 +3911,24 @@ function render() {
     }
   });
 
+  // Boss death dissolve - shrinking sprite with a rapid white-flash flicker
+  // (the same additive-redraw trick as the normal hit-flash above) fading
+  // into a trickle of particles (spawned in updateBossDeathFx). Position is
+  // fixed at time of death, matching the frozen death speech-bubble anchor.
+  state.bossDeathFx.forEach((fx) => {
+    const t = Math.min(1, (performance.now() - fx.startedAt) / fx.duration);
+    const size = 76 * Math.max(0.02, 1 - t);
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, 1 - t * 0.85);
+    drawSprite(ctx, SPRITES.boss, fx.x, fx.y, size, false);
+    if (Math.floor(t * 24) % 2 === 0) {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = Math.max(0, 0.7 - t * 0.6);
+      drawSprite(ctx, SPRITES.boss, fx.x, fx.y, size, false);
+    }
+    ctx.restore();
+  });
+
   // Sniper projectiles are small violet pixel bolts; brute projectiles are
   // bigger and blood-red so its heavy hit reads as more dangerous on sight.
   // Elemental elites carry their own pr.color, which takes priority.
@@ -3614,6 +4060,17 @@ function render() {
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 16, 0, Math.PI * 2); ctx.stroke();
   }
+  // Ultimate windup - an expanding magenta ring reading as "charging up"
+  // through the brief slow-motion before the blast lands.
+  if (state.ultimateWindup) {
+    const t = (performance.now() - state.ultimateWindup.startedAt) / state.ultimateWindup.duration;
+    ctx.save();
+    ctx.globalAlpha = 0.7;
+    ctx.strokeStyle = '#ff3d7f';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 12 + t * 50, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
   drawGun(ctx, p.x, p.y, p.gunAngle, p.shielded ? '#38e8d4' : '#F0B90B');
 
   // Speech bubbles - drawn last so they float above every sprite, enemy,
@@ -3627,6 +4084,32 @@ function render() {
   });
 
   ctx.restore();
+
+  // Second Wind vignette - screen-space (drawn after the shake ctx.restore()
+  // above, so the tint itself doesn't jitter with the shake) and heaviest at
+  // the edges so the arena's center - where the action actually is - stays
+  // clearly visible. Pulses faster as HP gets closer to 0, matching the
+  // heartbeat tempo via the same secondWindIntensity() reading.
+  if (state.secondWindActive) {
+    const intensity = secondWindIntensity();
+    const pulse = 0.5 + 0.5 * Math.sin(now * (5 + intensity * 5));
+    const maxAlpha = 0.3 + intensity * 0.25;
+    const vg = ctx.createRadialGradient(
+      canvas.width / 2, canvas.height / 2, canvas.height * 0.22,
+      canvas.width / 2, canvas.height / 2, canvas.height * 0.75
+    );
+    vg.addColorStop(0, 'rgba(160,0,0,0)');
+    vg.addColorStop(1, `rgba(160,0,0,${(maxAlpha * (0.7 + 0.3 * pulse)).toFixed(3)})`);
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
+  // Ultimate blast flash - full white, decayed in update() (see
+  // state.ultimateFlash), screen-space like the vignette above.
+  if (state.ultimateFlash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${Math.min(1, state.ultimateFlash).toFixed(3)})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
 
   if (state.waveBanner.active) {
     const alpha = waveBannerAlpha();
@@ -3715,6 +4198,7 @@ async function gameOver() {
   state.running = false;
   GameAudio.stopBeamHum();
   GameAudio.stopFlameHiss();
+  GameAudio.stopHeartbeat();
   GameAudio.stopAllVoiceLines();
   GameAudio.playGameOver();
   gameScreen.classList.add('hidden');
